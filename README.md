@@ -47,5 +47,59 @@ If the preamble is accepted by the server the client can then send one or more d
 | **uint64_t** | timestamp_sec     | 64-bit number of seconds in the 128-bit timestamp.           |
 | **uint64_t** | timestamp_nsec    | 64-bit number of nanoseconds in the 128-bit   timestamp.     |
 
+The following diagram shows the relationship between the three length fields. 
+
+The Total Length is the length in bytes of the entire record, including header at the start and any padding at the end. The ability to pad allows the  possibility that the next record can begin aligned to a word boundary to aid mapping of the header onto a C/C++ structure. It also allows for implementations where the record length is fixed irrespective of how much of the space is used to store data.
+
+The pair of length, Payload Length and Compressed Length, allow for future implementations that compress the large data payload before it is sent over the network.
+
+Independent of whether compression is used or not the Payload Length always represents the length of the data payload in uncompressed form. If the data is not compressed then this is identical to the Compressed Length field. If the payload has been compressed the Compressed Length field holds the length of the space in the record occupied by the compressed payload. In that case the Payload Length is has the same definition as earlier, the space required to hold the payload after decompression.
 
 
+
+![image-20190412145122093](/Users/heyes/develop/INDRA-SGC/INDRA_Stream_Test/readme_images/image-20190412145122093.png)
+
+
+
+When run with no command line parameters the default is to send a single record of length equal to the header length plus 40 bytes. In order to test the performance of the network link the test client has a command line option to loop and send a number of buffers after which the average buffer rate and data rate are displayed. To allow for comprehensive testing the number of buffers and buffer size can be set. It is possible that there may be data dependent artifacts that would skew test results (for example hardware or drivers giving special treatment long sequences of the same value). To mitigate this the test client defaults to sending a buffer filled with random numbers or the user can provide a data file from which the data is read. To improve and display test accuracy the client can automatically repeat the test a number of times and displays a mean and standard deviation at the end.
+
+ 
+
+The test client can also be used to emulate part of a larger system with multiple data sources. In this mode the user can provide a suggested data rate, in kilobytes per second, and the test client attempts to generate data at this rate.
+
+ 
+
+For low level testing the client has a "verbose" option which turns on debug prints. This is particularly useful when sending a small number of relatively small buffers since the buffer contents are printed in hexadecimal format. With the same option used at the receiving end manual data quality checks can be made.
+
+ 
+
+The command line options are summarized here:
+
+​            
+
+| -v          | verbose (optional)                                           |
+| ----------- | ------------------------------------------------------------ |
+| -t <target> | specify a host (optional, default   \"localhost\")           |
+| -f <file>   | read source data from a file (optional,   default random data) |
+| -p <n>      | specify a port (default 5555).                               |
+| -n <n>      | number of buffers per loop (default 1).                      |
+| -l <n>      | total number of cycles (default 1).                          |
+| -b <n>      | n bytes per data packet (default 40).                        |
+| -r <n>      | rate in kbyte/s (default, fast as possible).                 |
+| -c          | compress data before send (optional, not   implemented)      |
+
+ 
+
+# Implementation details
+
+The code is written in C for portability and speed using standard Posix and Unix system calls. The command line arguments are decoded by the main routine which creates the socket over which the data will be sent. For maximum flexibility the target host can be specified as an IP address in dot notation or a hostname. A use of the dot notation is to force routing of the data through a specific interface. Both filling the data buffer with random numbers and reading the content from a file are time consuming tasks so a master buffer is created and filled once. The contents of the master are then copied to four buffers that are then queued in a thread safe FIFO, the "free fifo". An empty FIFO, the "output fifo", is created along with a thread to handle writing on the socket. The main thread then enters a loop. Each time around it takes a buffer off the "free fifo", updates the record_counter field in the header, and puts the buffer on the "output fifo". The number of loops is either 1 or the product of the -n and -l option values. Meanwhile, the write thread waits on the "output fifo", dequeues buffers which are written on the socket and returned the "free fifo". 
+
+ ![image-20190412151514212](/Users/heyes/develop/INDRA-SGC/INDRA_Stream_Test/readme_images/image-20190412151514212.png)
+
+This sounds overly complicated but is done this way to provide "hooks" for future development. For example, a future implementation could use several write threads in parallel to improve throughput. Another partially implemented option is to add a compression stage into the pipeline.  A buffer from the "free fifo" would be passed via fifos to one of several compression threads which would compress the data part of buffers before they are put into the "output fifo". Once the compressed data has gone over the network the data in the buffer can be restored via a quick copy from the master copy and put back in the "free fifo".
+
+ 
+
+The main thread loop exits when the requested number of records have been queued. Since the writing is done in a separate thread the main routine must wait for all of the writing thread to finish before it can exit.
+
+ 
