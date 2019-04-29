@@ -160,5 +160,12 @@ The pair of length, Payload Length and Compressed Length, allow for future imple
 
 Independent of whether compression is used or not the Payload Length always represents the length of the data payload in uncompressed form. If the data is not compressed then this is identical to the Compressed Length field. If the payload has been compressed the Compressed Length field holds the length of the space in the record occupied by the compressed payload. In that case the Payload Length is has the same definition as earlier, the space required to hold the payload after decompression.
 
+ ## stream_router 
  
+ ### Function
+ 
+ The goal of the test router is to provide a mechanism for receiving data on a TCP socket and publishing it so that one or more subscribers have access to the data. It provides the ability to test streaming data producers under various conditions giving the ability to measure
+data and block reception rates and display recieved data block contents.
+ 
+ ### Operation
 
