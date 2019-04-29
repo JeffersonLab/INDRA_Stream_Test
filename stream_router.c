@@ -14,14 +14,17 @@
 #include <unistd.h>
 
 #ifdef USEZMQ
+
 #include "zmq.h"
 #include "czmq.h"
+
 #endif
 
 #include "stream_tools.h"
 
 int do_delay = 0;
 int do_debug = 0;
+int do_stats = 0;
 int worker_threads = 1;
 int keep_going = 1;
 int zmq_mode = 0;
@@ -34,356 +37,390 @@ void *publish_socket;
 #include <mpi.h>
 
 typedef struct worker_thread_context {
-	char name[64];
-	int socket;
-	pthread_t thread;
-	void *zmq_context;
+    char name[64];
+    int socket;
+    pthread_t thread;
+    void *zmq_context;
 } worker_thread_context_t;
 
-void buf_free(void *buf, void *hint) {
-	// Buffer was allocated with Malloc(), free it with free()
-	if (do_debug > 0)
-		printf("call free\n");
-	free(buf);
+void buf_free(void *buf) {
+    // Buffer was allocated with Malloc(), free it with free()
+    if (do_debug > 0)
+        printf("call free\n");
+    free(buf);
 }
 
 void *output_thread(void *arg) {
-	printf("Output thread starts -------\n");
+    printf("Output thread starts -------\n");
 
-	while (keep_going) {
-		stream_buffer_t *buf = stream_queue_get(out_queue);
-		if (buf == NULL)
-			break;
+    while (keep_going) {
+        stream_buffer_t *buf = stream_queue_get(out_queue);
+        if (buf == NULL)
+            break;
 #ifdef USEZMQ
-		if (zmq_mode) {
-			int n = zmq_send(publish_socket, buf, buf->total_length, 0);
+        if (zmq_mode) {
+            int n = zmq_send(publish_socket, buf, buf->total_length, 0);
 
-			if (n == -1) {
-				perror("zmq_send error");
-				break;
-			}
-		}
+            if (n == -1) {
+                perror("zmq_send error");
+                break;
+            }
+        }
 #endif
-		// Done with this buffer
-		free(buf);
-	}
+        // Done with this buffer
+        free(buf);
+    }
 
-	printf("Output thread ends -------\n");
-	return (NULL);
+    printf("Output thread ends -------\n");
+    return (NULL);
 }
 
 void *worker_routine(void *arg) {
-	worker_thread_context_t *ctx = arg;
+    worker_thread_context_t *ctx = arg;
 
-	ctx->thread = pthread_self();
+    ctx->thread = pthread_self();
 
-	int looping = 1;
-	uint32_t magic, source_id;
+    int looping = 1;
+    uint32_t magic, source_id;
+    uint64_t data_counter, loop_counter;
+    struct timespec tStart, tEnd, tDiff;
 
-	// First thing on the socket is the magic number
-	read(ctx->socket, &magic, 4);
+    // First thing on the socket is the magic number
+    read(ctx->socket, &magic, 4);
 
-	if (magic != CODA_MAGIC) {
-		printf("*** Spurious connect attempt *** : magic read %08x\n", magic);
-	} else {
+    if (magic != CODA_MAGIC) {
+        printf("*** Spurious connect attempt *** : magic read %08x\n", magic);
+    } else {
 
-		// Second thing on the thread is the source ID
+        // Second thing on the thread is the source ID
 
-		int nr = read(ctx->socket, &source_id, 4);
-		if (nr != 4) {
-			printf("expected ID but only read %d bytes\n", nr);
-			return (NULL);
-		}
+        int nr = read(ctx->socket, &source_id, 4);
+        if (nr != 4) {
+            printf("expected ID but only read %d bytes\n", nr);
+            return (NULL);
+        }
 
-		sprintf(ctx->name, "%08X", source_id);
+        sprintf(ctx->name, "%08X", source_id);
 
-		printf("Worker thread %s starts -------\n", ctx->name);
+        printf("Worker thread %s starts -------\n", ctx->name);
 
-		// If we ever exit the loop and buf != NULL then we must free it.
-		stream_buffer_t *buf = NULL;
+        // If we ever exit the loop and buf != NULL then we must free it.
+        stream_buffer_t *buf = NULL;
 
-		while (looping && keep_going) {
-			// stream_buffer_t *buf = (stream_buffer_t *) stream_queue_get(ctx->queue);
+        data_counter = 0;
+        loop_counter = 0;
+        clock_gettime(CLOCK_REALTIME, &tStart);
 
-			// Read the ID from the block header.
-			int nread;
 
-			uint32_t block_length;
-			uint8_t *lptr;
+        while (looping && keep_going) {
+            // stream_buffer_t *buf = (stream_buffer_t *) stream_queue_get(ctx->queue);
 
-			// Read the ID
-			nread = 0;
-			lptr = (uint8_t*) &source_id;
+            // Read the ID from the block header.
+            int nread;
 
-			if (do_debug > 0)
-				printf("call read to get length\n");
+            uint32_t block_length;
+            uint8_t *lptr;
 
-			while (nread < 4) {
-				int n = read(ctx->socket, lptr + nread, 4 - nread);
+            // Read the ID
+            nread = 0;
+            lptr = (uint8_t *) &source_id;
 
-				if (n <= 0) {
-					looping = 0;
-					break;
-				}
-				nread += n;
-			}
-			if (!looping || !keep_going) {
-				break;
-			}
-			if (do_debug > 0)
-				printf("read ID %08X\n", source_id);
+            if (do_debug > 0)
+                printf("Read the ID - 4 bytes \n");
 
-			// Read the length
 
-			nread = 0;
-			lptr = (uint8_t*) &block_length;
+            while (nread < 4) {
+                int n = read(ctx->socket, lptr + nread, 4 - nread);
 
-			if (do_debug > 0)
-				printf("call read to get length\n");
+                if (n <= 0) {
+                    looping = 0;
+                    break;
+                }
+                nread += n;
+            }
+            if (!looping || !keep_going) {
+                break;
+            }
+            if (do_debug > 0)
+                printf(" \tID = %08X\n", source_id);
 
-			while (nread < 4) {
-				int n = read(ctx->socket, lptr + nread, 4 - nread);
+            // Read the length
 
-				if (n <= 0) {
-					looping = 0;
-					break;
-				}
-				nread += n;
-			}
-			if (!looping || !keep_going) {
-				break;
-			}
-			if (do_debug > 0)
-				printf("read length %d\n", block_length);
+            nread = 0;
+            lptr = (uint8_t *) &block_length;
 
-			// Here we take ownership of memory so we have to free it somewhere.
-			buf = (stream_buffer_t *) malloc(block_length);
+            if (do_debug > 0)
+                printf("read overall length\n");
 
-			buf->total_length = block_length;
-			buf->source_id = source_id;
+            while (nread < 4) {
+                int n = read(ctx->socket, lptr + nread, 4 - nread);
 
-			nread = 8;
-			uint8_t *bptr = (uint8_t *) buf;
+                if (n <= 0) {
+                    looping = 0;
+                    break;
+                }
+                nread += n;
+            }
+            if (!looping || !keep_going) {
+                break;
+            }
+            if (do_debug > 0)
+                printf("\tlength = %d\n", block_length);
 
-			while (nread < block_length) {
-				int n = read(ctx->socket, bptr + nread, block_length - nread);
-				if (n <= 0) {
-					looping = 0;
-					// Here we free the buffer id something goes wrong
-					break;
-				}
-				nread += n;
-			}
+            // Here we take ownership of memory so we have to free it somewhere.
+            buf = (stream_buffer_t *) malloc(block_length);
 
-			if (!looping || !keep_going)
-				break;
+            buf->total_length = block_length;
+            buf->source_id = source_id;
 
-			if (do_debug > 0)
-				printf("read %d bytes of data\n", nread);
+            nread = 8;
+            uint8_t *bptr = (uint8_t *) buf;
 
-			if (buf->magic != CODA_MAGIC) {
-				printf("Magic number error %08x should be %08x\n", buf->magic,
-				CODA_MAGIC);
-			}
-			if (do_debug > 0)
-				print_data_hex((uint8_t *) buf, buf->total_length);
+            while (nread < block_length) {
+                int n = read(ctx->socket, bptr + nread, block_length - nread);
+                if (n <= 0) {
+                    looping = 0;
+                    // Here we free the buffer id something goes wrong
+                    break;
+                }
+                nread += n;
+            }
 
-			if (do_debug > 0)
-				printf("read ID from block header %08X\n", buf->source_id);
+            if (!looping || !keep_going)
+                break;
 
-			if (buf->source_id != source_id) {
-				printf(
-						"*** ID from block header %08X != ID from connect %08X\n",
-						buf->source_id, source_id);
-				break;
-			}
+            // Handle statistics...
+            data_counter += nread;
+            loop_counter++;
 
-			if (do_debug > 0)
-				printf("calling nng_send\n");
+            clock_gettime(CLOCK_REALTIME, &tEnd);
+            time_subtract(&tDiff, &tEnd, &tStart);
+            double tDiffDouble = ((float) tDiff.tv_sec) + ((float) tDiff.tv_nsec / 1000000000.0);
 
-			// we give up ownership of the buffer
-			stream_queue_add(out_queue, buf);
-			buf = NULL;
+            if (do_stats && (tDiffDouble > 10.0)) {
+                double loop_rate, data_rate;
 
-		}
-		if (buf != NULL) {
-			printf(
-					"Worker thread %s left the main thread and buf != NULL, so free(buf)\n",
-					ctx->name);
-			free(buf);
-		}
+                loop_rate = ((float) loop_counter) / tDiffDouble;
+                data_rate = ((float) data_counter) / (tDiffDouble * 1000000000.0); // GByte/s
 
-	}
-	printf("Worker thread %s ends -------\n", ctx->name);
+                printf("ID %08X - buffer rate %.2f Hz, data rate %.6f GByte/s \n", buf->source_id, loop_rate,
+                       data_rate);
 
-	shutdown(ctx->socket, SHUT_RDWR);
+                data_counter = 0;
+                loop_counter = 0;
+                clock_gettime(CLOCK_REALTIME, &tStart);
+            }
 
-	free(ctx);
-	return 0;
+            if (do_debug > 0)
+                printf("read %d bytes of data\n", nread);
+
+            if (buf->magic != CODA_MAGIC) {
+                printf("Magic number error %08x should be %08x\n", buf->magic,
+                       CODA_MAGIC);
+            }
+            if (do_debug > 0)
+                print_data_hex((uint8_t *) buf, buf->total_length);
+
+            if (do_debug > 0)
+                printf("read ID from block header %08X\n", buf->source_id);
+
+            if (buf->source_id != source_id) {
+                printf(
+                        "*** ID from block header %08X != ID from connect %08X\n",
+                        buf->source_id, source_id);
+                break;
+            }
+
+            if (do_debug > 0)
+                printf("calling nng_send\n");
+
+            // we give up ownership of the buffer
+            stream_queue_add(out_queue, buf);
+            buf = NULL;
+
+        }
+        if (buf != NULL) {
+            printf(
+                    "Worker thread %s left the main thread and buf != NULL, so free(buf)\n",
+                    ctx->name);
+            free(buf);
+        }
+
+    }
+    printf("Worker thread %s ends -------\n", ctx->name);
+
+    shutdown(ctx->socket, SHUT_RDWR);
+
+    free(ctx);
+    return 0;
 }
 
 void cc_handler(int signum) {
-	keep_going = 0;
-	close(server_socket);
-	shutdown(server_socket, SHUT_RDWR);
+    keep_going = 0;
+    close(server_socket);
+    shutdown(server_socket, SHUT_RDWR);
 }
 
 // Give the poor user some help on command line options.
 void print_options(char *pname) {
 
-	printf("usage:\t%s [-v] [-t target] [-p port] [-u url]\n", pname);
-	printf("\t-v: verbose\n");
-	printf("\t-z: use zmq for output\n");
-	printf("\t-m: use mpi for output\n");
-	printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
-	printf("\t-p <port>: specify a port [default: 5555]\n");
-	printf("\t-u <url>: specify url to publish on [default: tcp://*:5556]\n");
+    printf("usage:\t%s [-v] [-t target] [-p port] [-u url]\n", pname);
+    printf("\t-v: verbose\n");
+    printf("\t-z: use zmq for output\n");
+    printf("\t-m: use mpi for output\n");
+    printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
+    printf("\t-p <port>: specify a port [default: 5555]\n");
+    printf("\t-u <url>: specify url to publish on [default: tcp://*:5556]\n");
 }
 
-int main(int argc, char** argv) {
-	// default address to listen to
+int main(int argc, char **argv) {
+    // default address to listen to
 
-	int target_port = 5555;
+    int target_port = 5555;
 
-	char opt;
-	while ((opt = getopt(argc, argv, "mzvp:u:")) != -1) {
-		switch (opt) {
-		case 'v':
-			// Log to stdout
-			//zsys_set_logstream(stdout);
-			do_debug++;
-			break;
-		case 'z':
-			zmq_mode = 1;
-			printf ("forward data using ZMQ\n");
+    char opt;
+    while ((opt = getopt(argc, argv, "mzvp:su:")) != -1) {
+        switch (opt) {
+            case 'v':
+                // Log to stdout
+                //zsys_set_logstream(stdout);
+                do_debug++;
+                break;
+            case 'z':
+                zmq_mode = 1;
+                printf("forward data using ZMQ\n");
 
-			break;
-		case 'm':
-			mpi_mode = 1;
-			printf ("forward data using MPI\n");
+                break;
+            case 'm':
+                mpi_mode = 1;
+                printf("forward data using MPI\n");
 
-			break;
-		case 'p':
-			// Send to this port.
-			target_port = atoi(optarg);
-			if (target_port == 0) {
-				printf("invalid port number = %s\n", optarg);
-				exit(0);
-			}
-			printf("send to port %d\n", target_port);
-			break;
-		case 'u':
-			publisher = strdup(optarg);
-			break;
-		default:
-			print_options(argv[0]);
+                break;
+            case 'p':
+                // Send to this port.
+                target_port = atoi(optarg);
+                if (target_port == 0) {
+                    printf("invalid port number = %s\n", optarg);
+                    exit(0);
+                }
+                printf("send to port %d\n", target_port);
+                break;
+            case 's':
+                // Send to this port.
+                do_stats = 1;
 
-			return (0);
-		}
+                printf("print stats every 10 seconds \n");
+                break;
+            case 'u':
+                publisher = strdup(optarg);
+                break;
+            default:
+                print_options(argv[0]);
 
-	}
+                return (0);
+        }
 
-	//  Socket to receive from to sources
-	server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    }
+
+    //  Socket to receive from to sources
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
 
-	if (server_socket < 0) {
-		perror("Can't open socket\n");
-		exit(1);
-	}
+    if (server_socket < 0) {
+        perror("Can't open socket\n");
+        exit(1);
+    }
 
-	struct sockaddr_in sin;
-	bzero(&sin, sizeof(sin));
+    struct sockaddr_in sin;
+    bzero(&sin, sizeof(sin));
 
-	sin.sin_family = AF_INET;
+    sin.sin_family = AF_INET;
 
-	sin.sin_addr.s_addr = htonl(INADDR_ANY);
+    sin.sin_addr.s_addr = htonl(INADDR_ANY);
 
-	//sin.sin_addr.s_addr = inet_addr("129.57.109.160");
-	sin.sin_port = htons(target_port);
+    sin.sin_port = htons(target_port);
 
-	if (bind(server_socket, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
-		perror("bind error\n");
-		exit(1);
-	}
+    if (bind(server_socket, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
+        perror("bind error\n");
+        exit(1);
+    }
 
-	printf("bound to port %d\n", target_port);
+    printf("bound to port %d\n", target_port);
 
-	printf("calling listen\n");
+    printf("calling listen\n");
 
-	if (listen(server_socket, 5) < 0) {
-		perror("listen failed\n");
-		exit(1);
-	}
+    if (listen(server_socket, 5) < 0) {
+        perror("listen failed\n");
+        exit(1);
+    }
 
-	printf("listening\n");
+    printf("listening\n");
 
-	signal(SIGINT, cc_handler);
+    signal(SIGINT, cc_handler);
 
 #ifdef USEZMQ
-	if (zmq_mode) {
-		// Initialize zmq
-		zsys_init();
+    if (zmq_mode) {
+        // Initialize zmq
+        zsys_init();
 
-		void *context = zmq_ctx_new();
+        void *context = zmq_ctx_new();
 
-		int maj, min, pat;
-		zmq_version(&maj, &min, &pat);
+        int maj, min, pat;
+        zmq_version(&maj, &min, &pat);
 
-		printf("using ZMQ version - %d.%d.%d\n", maj, min, pat);
-		// Create a ZMQ publish socket
+        printf("using ZMQ version - %d.%d.%d\n", maj, min, pat);
+        // Create a ZMQ publish socket
 
-		publish_socket = zmq_socket(context, ZMQ_PUB);
+        publish_socket = zmq_socket(context, ZMQ_PUB);
 
-		if (zmq_bind(publish_socket, publisher) == -1) {
-			perror("zmq_bind error :");
-			exit(-1);
-		}
-	}
+        if (zmq_bind(publish_socket, publisher) == -1) {
+            perror("zmq_bind error :");
+            exit(-1);
+        }
+    }
 #endif
 
-	out_queue = stream_queue_create(100);
-	pthread_t output;
-	pthread_create(&output, NULL, output_thread, (void *) NULL);
+    out_queue = stream_queue_create(100);
+    pthread_t output;
+    pthread_create(&output, NULL, output_thread, (void *) NULL);
 
-	signal(SIGINT, cc_handler);
+    signal(SIGINT, cc_handler);
 
-	while (keep_going) {
-		struct sockaddr_in from;
-		int slen = sizeof(from);
-		bzero((char * ) &from, slen);
+    while (keep_going) {
+        struct sockaddr_in from;
+        int slen = sizeof(from);
+        bzero((char *) &from, slen);
 
-		int connection = accept(server_socket, (struct sockaddr *) &from,
-				(socklen_t *) &slen);
+        int connection = accept(server_socket, (struct sockaddr *) &from,
+                                (socklen_t *) &slen);
 
-		if (connection > 0) {
-			printf("We got a connection from %s\n",
-					inet_ntoa((struct in_addr) from.sin_addr));
-			printf("fire up a thread to handle it,\n");
+        if (connection > 0) {
+            printf("We got a connection from %s\n",
+                   inet_ntoa((struct in_addr) from.sin_addr));
+            printf("fire up a thread to handle it,\n");
 
-			worker_thread_context_t *thread_context;
+            worker_thread_context_t *thread_context;
 
-			// Create a worker thread structure
-			thread_context = (worker_thread_context_t *) malloc(
-					sizeof(worker_thread_context_t));
+            // Create a worker thread structure
+            thread_context = (worker_thread_context_t *) malloc(
+                    sizeof(worker_thread_context_t));
 
-			assert(thread_context != 0);
-			bzero(thread_context, sizeof(worker_thread_context_t));
+            assert(thread_context != 0);
+            bzero(thread_context, sizeof(worker_thread_context_t));
 
-			pthread_t worker;
+            pthread_t worker;
 
-			thread_context->socket = connection;
+            thread_context->socket = connection;
 
-			pthread_create(&worker, NULL, worker_routine,
-					(void *) thread_context);
-		} else
-			break;
-	}
-	close(server_socket);
+            pthread_create(&worker, NULL, worker_routine,
+                           (void *) thread_context);
+        } else
+            break;
+    }
+    close(server_socket);
 
-	printf("Shutting down due to SIGINT\n");
+    printf("Shutting down due to SIGINT\n");
 
-	exit(0);
+    exit(0);
 
-	return 0;
 }
