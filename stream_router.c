@@ -268,6 +268,7 @@ void print_options(char *pname) {
     printf("\t-v: verbose\n");
     printf("\t-z: use zmq for output\n");
     printf("\t-m: use mpi for output\n");
+    printf("\t-s: print statistics every 10s\n");
     printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
     printf("\t-p <port>: specify a port [default: 5555]\n");
     printf("\t-u <url>: specify url to publish on [default: tcp://*:5556]\n");
