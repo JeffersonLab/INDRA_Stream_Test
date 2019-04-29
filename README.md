@@ -82,7 +82,13 @@ This example divides 1,000,000 by 10 to get 100,000 bytes. It sends 100 buffers 
 
 #### Rate limiting
 
-The test data source sends data blocks contain In this mode the user can provide a suggested data rate, in kilobytes per second, and the test client attempts to generate data at this rate.
+In this mode the user can provide a suggested data rate, in kilobytes per second, and the test client attempts to generate data at this rate. The command line option -r <n> limits the rate to the specified kilobytes per second.
+
+```
+./stream_test_source -n 100 -l 10 -b 1000000 -r 100000
+```
+
+This example will limit to 100 MB/s.
 
 #### Debugging
 
