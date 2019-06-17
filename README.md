@@ -108,7 +108,7 @@ The command line options are summarized here:
 | -r <n>      | rate in kbyte/s (default, fast as possible).                 |
 | -c          | compress data before send (optional, not   implemented)      |
 
-#### Example
+#### Example output
 
 In the following example the stream_test_source is used with default parameters except that debugging is turned on.
 
@@ -164,15 +164,11 @@ Done testing!
 
 The test code is written in C for portability and speed using standard Posix and Unix system calls. The command line arguments are decoded by the main routine which creates the socket over which the data will be sent. For maximum flexibility the target host can be specified as an IP address in dot notation or a hostname. A use of the dot notation is to force routing of the data through a specific interface. Both filling the data buffer with random numbers and reading the content from a file are time consuming tasks so a master buffer is created and filled once. The contents of the master are then copied to four buffers that are then queued in a thread safe FIFO, the "free fifo". An empty FIFO, the "output fifo", is created along with a thread to handle writing on the socket. The main thread then enters a loop. Each time around it takes a buffer off the "free fifo", updates the record_counter field in the header, and puts the buffer on the "output fifo". The number of loops is either 1 or the product of the -n and -l option values. Meanwhile, the write thread waits on the "output fifo", dequeues buffers which are written on the socket and returned the "free fifo". 
 
- ![image-20190412151514212](/Users/heyes/develop/INDRA-SGC/INDRA_Stream_Test/readme_images/image-20190412151514212.png)
+ ![image-20190412151514212](./readme_images/image-20190412151514212.png)
 
 This sounds overly complicated but is done this way to provide "hooks" for future development. For example, a future implementation could use several write threads in parallel to improve throughput. Another partially implemented option is to add a compression stage into the pipeline.  A buffer from the "free fifo" would be passed via fifos to one of several compression threads which would compress the data part of buffers before they are put into the "output fifo". Once the compressed data has gone over the network the data in the buffer can be restored via a quick copy from the master copy and put back in the "free fifo".
 
- 
-
 The main thread loop exits when the requested number of records have been queued. Since the writing is done in a separate thread the main routine must wait for all of the writing thread to finish before it can exit.
-
- 
 
 ### Protocol
 
@@ -271,7 +267,7 @@ Option summary :
 | -z        | Turn on ZeroMQ publishing         |
 | -u <url>  | Specify the URL for publishing    |
 
-#### Example of output 
+#### Example output 
 
 ```
 
@@ -347,7 +343,7 @@ This argument is ten characters long and encodes a four byte source ID in hexade
 
 The defalt is 0xC0DA0001.
 
-#### Example of output
+#### Example output
 
 In this example we use the default URL, accept data only from the data source with ID 0xC0DA0001, and have debug on so we print the contents of the block. (note that this is the same as the previous example except for differences in the timestamp).
 
@@ -365,11 +361,9 @@ Hex dump of buffer 0x7ff1c700260a
 ------
 ```
 
-
-
 #### Notes for developers
 
-The ZeroMQ pub-sub socket pair works by the subscriber subscribing to the URL specified by the data source. The subscriber filters incoming data, looking for a match between a predefined N-byte pattern and the first N bytes of the incoming data. In the example code there is the following line of code : 
+When using the ZeroMQ pub-sub socket pair the subscriber subscribes to the URL specified and recieves ALL data published. The subscriber filters incoming data, looking for a match between a predefined N-byte pattern and the first N bytes of the incoming data. In the example code there is the following line  : 
 
 ```
 ret = zmq_setsockopt(socket, ZMQ_SUBSCRIBE, &source_id, 4);
@@ -399,8 +393,8 @@ typedef struct stream_buffer {
 
 ```
 
-As you can see, source_id is the first four bytes so that it can be used as the filter.
+As you can see, source_id is positioned as the first four bytes deliberately so that it can be used as the filter.
 
-##### How to filter?
+##### Stream routing options
 
-The four byte source ID allows for a lot of possible data sources to be routed via one router. It is likely that the user would like many channels sent to the same subscriber rather than one subscriber per channel. One thing that could be played with is how incoming records are matched. For example, by matching only the first byte of the data record (due to byte ordering this is the right most pair of digits in the source ID) and defining this to mean "detector". Then the rest of the ID could be channel within the detector. For large systems one could imagine several routers running in parallel. Then each detector would stream data to a different TCP port/host pair
+The four byte source ID at the start of each record allows for a lot of possible data sources to be routed via one router. It is likely that the user would like many channels sent to the same subscriber rather than one subscriber per channel. One thing that could be played with is how incoming records are matched. For example, by matching only the first byte of the data record (due to byte ordering this is the right most pair of digits in the source ID) and defining this to mean "detector". Then the rest of the ID could be channel within the detector. For large systems one router may not be able to manage the data flow and one could imagine several routers running in parallel. In this case each detector could stream data to it's own router using different TCP port/host pairs.
