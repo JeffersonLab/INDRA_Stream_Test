@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
 			int size = zmq_msg_size(&msg);
 			printf("id %08X == %08X length %d, counter %" PRIu64 "\n",
 					source_id, buf->source_id, size, buf->record_counter);
-			if (do_debug > 1)
+			if (do_debug > 0)
 				print_data_hex((uint8_t *) buf, buf->total_length);
 		}
 		zmq_msg_close(&msg);

@@ -96,8 +96,9 @@ For low level testing the client has a "verbose" option which turns on debug pri
 
 The command line options are summarized here:
 
-| -v          | verbose (optional)                                           |
+| Argument    | Comment                                                      |
 | ----------- | ------------------------------------------------------------ |
+| -v          | verbose (optional)                                           |
 | -h <target> | specify a host (optional, default   \"localhost\")           |
 | -f <file>   | read source data from a file (optional,   default random data) |
 | -p <n>      | specify a port (default 5555).                               |
@@ -106,6 +107,56 @@ The command line options are summarized here:
 | -b <n>      | n bytes per data packet (default 40).                        |
 | -r <n>      | rate in kbyte/s (default, fast as possible).                 |
 | -c          | compress data before send (optional, not   implemented)      |
+
+#### Example
+
+In the following example the stream_test_source is used with default parameters except that debugging is turned on.
+
+```
+./stream_test_source -v -v
+Debug turned on
+Debug turned on
+socket buffer size =100000
+>>> hostname >localhost<
+connected and preparing to send...
+Creating buffer pool 4 buffers
+Data buffers will be 88 bytes long
+Filling data source buffer with random numbers
+Writer for has data
+Hex dump of buffer 0x7f859ec02c10
+0000: 0100dac0 58000000 28000000 28000000 1920dac0 00000000 00000000 00000000
+0031: 60e2075d 00000000 885dac04 00000000 a7410000 f13ad610 d9acb760 2a0cb53a
+0063: 82b73144 c8da061c d88e0506 fe09e556 432ff356 4d04a477
+------
+Send thread exits
+Done testing!
+```
+
+In the next example the code is used to send a thousand 2MByte blocks, measure the rates and repeat the test four times.
+
+```
+titus:INDRA_Stream_Test heyes$ ./stream_test_source -b 4000000 -n 1000 -l 4
+send 4000000 bytes per message
+loop 1000 times
+Will measure rates 4 times
+socket buffer size =100000
+>>> hostname >localhost<
+connected and preparing to send...
+Creating buffer pool 4 buffers
+Data buffers will be 4000048 bytes long
+Filling data source buffer with random numbers
+size 4000048, buffer rate 971.59 Hz, data rate 3.886387 GByte/s
+size 4000048, buffer rate 1016.35 Hz, data rate 4.065461 GByte/s
+size 4000048, buffer rate 964.53 Hz, data rate 3.858157 GByte/s
+size 4000048, buffer rate 1033.46 Hz, data rate 4.133891 GByte/s
+Send thread exits
+Average rates are
+----------
+996.48 Hz, 3.985974 +- 0.12GByte/s
+Done testing!
+```
+
+
 
 ------
 
@@ -161,11 +212,195 @@ The pair of length, Payload Length and Compressed Length, allow for future imple
 Independent of whether compression is used or not the Payload Length always represents the length of the data payload in uncompressed form. If the data is not compressed then this is identical to the Compressed Length field. If the payload has been compressed the Compressed Length field holds the length of the space in the record occupied by the compressed payload. In that case the Payload Length is has the same definition as earlier, the space required to hold the payload after decompression.
 
  ## stream_router 
- 
+
  ### Function
- 
- The goal of the test router is to provide a mechanism for receiving data on a TCP socket and publishing it so that one or more subscribers have access to the data. It provides the ability to test streaming data producers under various conditions giving the ability to measure
-data and block reception rates and display recieved data block contents.
- 
+
+The goal of the test router is to provide a mechanism for receiving data on a TCP socket and publishing it so that one or more subscribers have access to the data. It provides the ability to test streaming data producers under various conditions giving the ability to measure data and block reception rates and display recieved data block contents.
+
  ### Operation
-  
+
+#### Server port selection
+
+The Stream Router listens for incoming TCP connections on a port specified using the -p option. 
+
+```
+./stream_router -p 5555
+```
+
+In this example the router listens on port 5555
+
+#### Debugging
+
+The -v option sets the debug verbosity, each instance of -d increments the level by one.
+
+```
+./stream_router -v -p 5555
+```
+
+In this example the router listens on port 5555 and prints diagnostics in the thread that reads data from the socket. Adding a second -v turns on printing of the entire incoming block in hex format.
+
+#### Statistics
+
+The -s option turns on printing of buffer rate and data rate at a fixed 10 second interval.
+
+#### ZeroMQ options
+
+The stream_router is so called because it has the optional ability to forward incoming data blocks to one or more destination processes. One option is to publish using  ZeroMQ publish subscribe sockets.
+
+The -z option enables publishing via ZeroMQ.
+
+The -u option allows the user to specifu a ZeroMQ URL that subscribers can subscribe to, the default is "tcp://*:5556"
+
+For example :
+
+```
+./stream_router -v -p 5555 -z -u tcp://*:9876
+```
+
+Will publish the data to any subscribers using TCP to port 9876.
+
+
+
+Option summary : 
+
+| Argument  | Comment                           |
+| --------- | --------------------------------- |
+| -v        | Verbose logging                   |
+| -p <port> | Listen on specified port          |
+| -s        | Print statistics every 10 seconds |
+| -z        | Turn on ZeroMQ publishing         |
+| -u <url>  | Specify the URL for publishing    |
+
+#### Example of output 
+
+```
+
+
+$ ./stream_router -v -v
+./stream_router starts
+Initializing -------
+	Executing with command line options
+	TCP stream input port 5555
+	NOT Publishing using ZMQ
+
+## 	NOT printing stats every 10 seconds.
+
+​```
+listening on port 5555 for incoming stream connections
+​```
+
+Output thread starts -------
+We got a connection from 127.0.0.1
+fire up a thread to handle it,
+Worker thread C0DA0001 starts -------
+Read the ID - 4 bytes
+ 	ID = C0DA0001
+read overall length
+	length = 88
+read 88 bytes of data
+Hex dump of buffer 0x7fa239d00420
+0000: 0100dac0 58000000 28000000 28000000 1920dac0 00000000 00000000 00000000
+0031: c1d7075d 00000000 08fdf031 00000000 a7410000 f13ad610 d9acb760 2a0cb53a
+0063: 82b73144 c8da061c d88e0506 fe09e556 432ff356 4d04a477
+
+read ID from block header C0DA0001
+Add buffer to output stream
+Read the ID - 4 bytes
+Worker thread C0DA0001 ends -------
+```
+
+In this example the sender has ID C0DA0001 and sent exactly one data block 88 bytes long. The thread receiving the stream via TCP terminates when the connection closes. The sender sends it's ID as the first four bytes of every block so the termination should always occur while the receiving thread is waitinf for the four byte ID.
+
+
+
+## stream_test_subscriber 
+
+### Function
+
+The stream_test_subscriber is an example of a subscriber to the data published by stream_router. It provides some basic functionality but is intended to be used as the basis for developer's code.
+
+### Operation
+
+#### Debugging
+
+The -v option turns the debug output on which causes a dump of the entire block in hexadecimal format.
+
+```
+./stream_test_subscriber -v
+```
+
+#### ZeroMQ URL
+
+The -u option sets the ZeroMQ URL on which to listen for incoming data. 
+
+```
+./stream_test_subscriber -u tcp://127.0.0.1:9876
+```
+
+The default is tcp://127.0.0.1:5556 
+
+#### Subscribed source ID
+
+This argument is ten characters long and encodes a four byte source ID in hexadecimal.
+
+./stream_test_subscriber -u tcp://127.0.0.1:9876 0xC0DA0001
+
+The defalt is 0xC0DA0001.
+
+#### Example of output
+
+In this example we use the default URL, accept data only from the data source with ID 0xC0DA0001, and have debug on so we print the contents of the block. (note that this is the same as the previous example except for differences in the timestamp).
+
+```
+./stream_test_subscriber -v 0xC0DA0001
+Debug level 1
+Subscribe to URL: tcp://127.0.0.1:5556
+Filter = c0da0001
+Subscribing to data source C0DA0001
+id C0DA0001 == C0DA0001 length 88, counter 0
+Hex dump of buffer 0x7ff1c700260a
+0000: 0100dac0 58000000 28000000 28000000 1920dac0 00000000 00000000 00000000
+0031: cddb075d 00000000 70f96f03 00000000 a7410000 f13ad610 d9acb760 2a0cb53a
+0063: 82b73144 c8da061c d88e0506 fe09e556 432ff356 4d04a477
+------
+```
+
+
+
+#### Notes for developers
+
+The ZeroMQ pub-sub socket pair works by the subscriber subscribing to the URL specified by the data source. The subscriber filters incoming data, looking for a match between a predefined N-byte pattern and the first N bytes of the incoming data. In the example code there is the following line of code : 
+
+```
+ret = zmq_setsockopt(socket, ZMQ_SUBSCRIBE, &source_id, 4);
+```
+
+This specifies that ZMQ compare the first four bytes of the data record with  the uint32_t value of source_id. This is set to 0xC0DA0001 and overriden by the first command line argument that is not one of the options.
+
+```
+	uint32_t source_id = strtol(argv[optind], NULL, 0);
+```
+
+The format of the data record can be found in stream_tools.h it is :
+
+```
+typedef struct stream_buffer {
+    uint32_t source_id;
+    uint32_t total_length;
+    uint32_t payload_length;
+    uint32_t compressed_length;
+    uint32_t magic;
+    uint32_t format_version;
+    uint64_t record_counter;
+    struct timespec timestamp;
+    uint32_t payload[];
+
+} stream_buffer_t;
+
+```
+
+As you can see, source_id is the first four bytes so that it can be used as the filter.
+
+##### How to filter?
+
+The four byte source ID allows for a lot of possible data sources to be routed via one router. It is likely that the user would like many channels sent to the same subscriber rather than one subscriber per channel. One thing that could be played with is how incoming records are matched. For example, by matching only the first byte of the data record (due to byte ordering this is the right most pair of digits in the source ID) and defining this to mean "detector". Then the rest of the ID could be channel within the detector. For large systems one could imagine several routers running in parallel. Then each detector would stream data to a different TCP port/host pair

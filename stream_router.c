@@ -218,7 +218,7 @@ void *worker_routine(void *arg) {
                 printf("Magic number error %08x should be %08x\n", buf->magic,
                        CODA_MAGIC);
             }
-            if (do_debug > 0)
+            if (do_debug > 1)
                 print_data_hex((uint8_t *) buf, buf->total_length);
 
             if (do_debug > 0)
@@ -232,7 +232,7 @@ void *worker_routine(void *arg) {
             }
 
             if (do_debug > 0)
-                printf("calling nng_send\n");
+                printf("Add buffer to output stream\n");
 
             // we give up ownership of the buffer
             stream_queue_add(out_queue, buf);
@@ -259,6 +259,7 @@ void cc_handler(int signum) {
     keep_going = 0;
     close(server_socket);
     shutdown(server_socket, SHUT_RDWR);
+    printf ("\nStream shutdown due to signal %s\n", sys_siglist[signum]);
 }
 
 // Give the poor user some help on command line options.
@@ -267,9 +268,8 @@ void print_options(char *pname) {
     printf("usage:\t%s [-v] [-t target] [-p port] [-u url]\n", pname);
     printf("\t-v: verbose\n");
     printf("\t-z: use zmq for output\n");
-    printf("\t-m: use mpi for output\n");
+    //printf("\t-m: use mpi for output\n");
     printf("\t-s: print statistics every 10s\n");
-    printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
     printf("\t-p <port>: specify a port [default: 5555]\n");
     printf("\t-u <url>: specify url to publish on [default: tcp://*:5556]\n");
 }
@@ -277,57 +277,79 @@ void print_options(char *pname) {
 int main(int argc, char **argv) {
     // default address to listen to
 
+    printf("%s starts\n", argv[0]);
+
     int target_port = 5555;
+    printf("Initializing -------\n");
 
-    char opt;
-    while ((opt = getopt(argc, argv, "mzvp:su:")) != -1) {
-        switch (opt) {
-            case 'v':
-                // Log to stdout
-                //zsys_set_logstream(stdout);
-                do_debug++;
-                break;
-            case 'z':
-                zmq_mode = 1;
-                printf("forward data using ZMQ\n");
+    if (argc >1) {
+        printf("\tExecuting with command line options\n\t");
+        char opt;
+        while ((opt = getopt(argc, argv, "mzvp:su:")) != -1) {
+            switch (opt) {
+                case 'v':
+                    // Log to stdout
+                    //zsys_set_logstream(stdout);
+                    do_debug++;
+                    break;
+                case 'z':
+                    zmq_mode = 1;
+                    break;
+                case 'p':
+                    // Send to this port.
+                {
+                    char *err;
+                    target_port = strtol(optarg, &err, 10);
 
-                break;
-            case 'm':
-                mpi_mode = 1;
-                printf("forward data using MPI\n");
-
-                break;
-            case 'p':
-                // Send to this port.
-                target_port = atoi(optarg);
-                if (target_port == 0) {
-                    printf("invalid port number = %s\n", optarg);
-                    exit(0);
+                    // Catch common errors
+                    if ((err == optarg) ||
+                        (*err != '\0') ||
+                        (target_port < 1024) ||
+                        (target_port > 65535)) {
+                        printf("invalid port number = %s\n", optarg);
+                        printf("%s exits\n", argv[0]);
+                        exit(0);
+                    }
                 }
-                printf("send to port %d\n", target_port);
-                break;
-            case 's':
-                // Send to this port.
-                do_stats = 1;
+                    break;
+                case 's':
+                    // Send to this port.
+                    do_stats = 1;
 
-                printf("print stats every 10 seconds \n");
-                break;
-            case 'u':
-                publisher = strdup(optarg);
-                break;
-            default:
-                print_options(argv[0]);
+                    break;
+                case 'u':
+                    publisher = strdup(optarg);
+                    break;
+                default:
+                    print_options(argv[0]);
+                    printf("%s exits\n", argv[0]);
+                    return (0);
+            }
 
-                return (0);
         }
-
+    } else {
+        printf("\tExecuting with no command line options\n\t   Using default settings\n");
     }
+
+    printf("TCP stream input port %d\n\t", target_port);
+
+    if (!zmq_mode) printf("NOT Publishing using ZMQ\n\t");
+    else
+        printf("Publishing using ZMQ using URL %s\n\t", publisher);
+
+
+    if (!do_stats) printf("NOT ");
+    printf("printing stats every 10 seconds.\n");
+
+    printf("-------\n\n");
 
     //  Socket to receive from to sources
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
 
     if (server_socket < 0) {
+        printf("%s exits -> ", argv[0]);
+
         perror("Can't open socket\n");
         exit(1);
     }
@@ -342,20 +364,19 @@ int main(int argc, char **argv) {
     sin.sin_port = htons(target_port);
 
     if (bind(server_socket, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
+        printf("%s exits -> ", argv[0]);
         perror("bind error\n");
         exit(1);
     }
 
-    printf("bound to port %d\n", target_port);
+    printf("\tlistening on port %d for incoming stream connections\n",target_port);
 
-    printf("calling listen\n");
 
     if (listen(server_socket, 5) < 0) {
+        printf("%s exits -> ", argv[0]);
         perror("listen failed\n");
         exit(1);
     }
-
-    printf("listening\n");
 
     signal(SIGINT, cc_handler);
 
@@ -369,12 +390,13 @@ int main(int argc, char **argv) {
         int maj, min, pat;
         zmq_version(&maj, &min, &pat);
 
-        printf("using ZMQ version - %d.%d.%d\n", maj, min, pat);
+        printf("\t Will publish data using ZMQ version - %d.%d.%d\n", maj, min, pat);
         // Create a ZMQ publish socket
 
         publish_socket = zmq_socket(context, ZMQ_PUB);
 
         if (zmq_bind(publish_socket, publisher) == -1) {
+            printf("%s exits -> ", argv[0]);
             perror("zmq_bind error :");
             exit(-1);
         }
@@ -420,7 +442,7 @@ int main(int argc, char **argv) {
     }
     close(server_socket);
 
-    printf("Shutting down due to SIGINT\n");
+    printf("%s exits\n", argv[0]);
 
     exit(0);
 
