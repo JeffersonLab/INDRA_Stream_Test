@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+// #include <mpi.h>
 
 #ifdef USEZMQ
 
@@ -33,8 +34,6 @@ int server_socket;
 char *publisher = "tcp://*:5556";
 void *out_queue;
 void *publish_socket;
-
-#include <mpi.h>
 
 typedef struct worker_thread_context {
     char name[64];
