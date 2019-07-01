@@ -1,0 +1,13 @@
+# emacs droppings
+#*#
+*~
+
+# library objects
+*.o
+*.a
+*.so
+
+# executables
+stream_router
+stream_test_source
+test_subscriber
