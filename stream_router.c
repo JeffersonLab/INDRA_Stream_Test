@@ -13,12 +13,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#ifdef USEZMQ
-
 #include "zmq.h"
 #include "czmq.h"
-
-#endif
 
 #include "stream_tools.h"
 
@@ -33,8 +29,6 @@ int server_socket;
 char *publisher = "tcp://*:5556";
 void *out_queue;
 void *publish_socket;
-
-#include <mpi.h>
 
 typedef struct worker_thread_context {
     char name[64];
@@ -57,7 +51,6 @@ void *output_thread(void *arg) {
         stream_buffer_t *buf = stream_queue_get(out_queue);
         if (buf == NULL)
             break;
-#ifdef USEZMQ
         if (zmq_mode) {
             int n = zmq_send(publish_socket, buf, buf->total_length, 0);
 
@@ -66,7 +59,6 @@ void *output_thread(void *arg) {
                 break;
             }
         }
-#endif
         // Done with this buffer
         free(buf);
     }
@@ -380,7 +372,6 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, cc_handler);
 
-#ifdef USEZMQ
     if (zmq_mode) {
         // Initialize zmq
         zsys_init();
@@ -401,7 +392,6 @@ int main(int argc, char **argv) {
             exit(-1);
         }
     }
-#endif
 
     out_queue = stream_queue_create(100);
     pthread_t output;
