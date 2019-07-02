@@ -10,4 +10,4 @@
 # executables
 stream_router
 stream_test_source
-test_subscriber 
+stream_test_subscriber
