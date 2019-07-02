@@ -4,6 +4,7 @@ LD=gcc
 
 # Use pkg-config to lookup the proper compiler and linker flags for LCM
 CFLAGS=-I/usr/local/include -I/usr/include -Wall -g -O2 -DPARALLEL=32 -DNDEBUG=1 -fPIC -std=gnu99
+
 LDFLAGS=stream_tools.o -L/usr/local/lib64 -L/usr/local/lib -lstdc++ -lzmq -lczmq -lm -lpthread -g # -lsnappy
 
 TARGETS= stream_router stream_test_source test_subscriber
