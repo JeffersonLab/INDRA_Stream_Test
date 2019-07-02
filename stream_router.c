@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+// #include <mpi.h>
 
 #include "zmq.h"
 #include "czmq.h"
