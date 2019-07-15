@@ -7,6 +7,10 @@
 *.a
 *.so
 
+# various files
+.nfs*
+*.dat
+
 # executables
 stream_router
 stream_test_source
