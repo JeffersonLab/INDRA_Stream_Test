@@ -15,5 +15,3 @@
 stream_router
 stream_test_source
 stream_test_subscriber
-stream_source
-stream_subscriber
