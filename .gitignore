@@ -7,8 +7,9 @@
 *.a
 *.so
 
-# nfs files
+# various files
 .nfs*
+*.dat
 
 # executables
 stream_router

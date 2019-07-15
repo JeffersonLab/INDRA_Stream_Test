@@ -7,7 +7,7 @@ CFLAGS=-I/usr/local/include -I/usr/include -Wall -g -O2 -DPARALLEL=32 -DNDEBUG=1
 
 LDFLAGS=stream_tools.o -L/usr/local/lib64 -L/usr/local/lib -lstdc++ -lzmq -lczmq -lm -lpthread -g # -lsnappy
 
-TARGETS= stream_router stream_test_source stream_test_subscriber stream_source stream_subscriber
+TARGETS= stream_router stream_test_source stream_test_subscriber
 
 .PRECIOUS: %.o	
 
