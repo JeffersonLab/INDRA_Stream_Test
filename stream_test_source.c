@@ -1,3 +1,4 @@
+//
 /*
  * stream_test_source.c
  *
@@ -55,14 +56,14 @@
 int cycle_count = 0;
 double *data_rates, *block_rates;
 
-// We will set up a pool of reuseable buffers. This is faster and safer than malloc.
+// We will set up a pool of reusable buffers. This is faster and safer than malloc.
 stream_rb_t *free_buffer_queue;
 
 // If we do compression the queued buffers may become corrupted. We keep a master copy
 // so that we can use bcopy to refresh the buffers in the pool.
 stream_buffer_t *master_data;
 
-// Thread loops keep going until keep_goint = 0
+// Thread loops keep going until keep_going = 0
 int keep_going = TRUE;
 
 // Default host is localhost
@@ -82,7 +83,7 @@ int loops_per_cycle = 1;
 // By default we calculate rates after every buffer.
 int total_cycles = 1;
 
-// Default to debug off. Each occurance of -v on the command line increments do_debug.
+// Default to debug off. Each occurrence of -v on the command line increments do_debug.
 int do_debug = 0;
 int do_scan = 0;
 
@@ -90,44 +91,41 @@ int do_scan = 0;
 int payload_length = 10;
 
 void print_rate(struct timespec *tv, uint32_t length) {
-    
+    // local variables
     struct timespec tvEnd, tvDiff;
     double loop_rate, data_rate;
-    
+    // calculate rates
     clock_gettime(CLOCK_REALTIME, &tvEnd);
     time_subtract(&tvDiff, &tvEnd, tv);
-
-    block_rates[cycle_count] = loop_rate = ((float) loops_per_cycle) / ((float) tvDiff.tv_sec + ((float) tvDiff.tv_nsec / 1000000000.0));
-    data_rates[cycle_count++] = data_rate = (float) length * loop_rate / 1000000000.0;
-    
-    if (do_scan)
-        printf("%d, %.2f, %.6f\n", length, loop_rate, data_rate);
-    else
-        printf("size %d, buffer rate %.2f Hz, data rate %.6f GByte/s \n", length, loop_rate, data_rate);
+    // only store 10000 data and block rate entries
+    if (cycle_count % 10000 == 0) cycle_count = 0;
+    block_rates[cycle_count]  = loop_rate = ((float) loops_per_cycle) /
+                                            ((float) tvDiff.tv_sec + ((float) tvDiff.tv_nsec / 1000000000.0));
+    data_rates[cycle_count++] = data_rate = ((float) length * loop_rate) / 1000000000.0;
+    // print rates
+    printf("buffer size = %d bytes, buffer rate = %.2f Hz, data rate = %.6f GByte/s\n", length, loop_rate, data_rate);
 }
 
 void print_final_stats() {
-
+    // local variables
     double block_rate = 0.0, data_rate = 0.0, sd = 0.0;
     int i;
-
+    // calculate summary rates
     for (i = 0; i < cycle_count; i++) {
         block_rate += block_rates[i];
         data_rate += data_rates[i];
     }
-
     block_rate /= cycle_count;
     data_rate /= cycle_count;
     for (i = 0; i < cycle_count; i++)
         sd += pow(data_rate - data_rates[i], 2);
     sd /= cycle_count;
     sd = sqrt(sd);
-    printf("%.2f Hz, %.6f +- %.2fGByte/s \n", block_rate, data_rate, sd);
+    printf("%.2f Hz, %.6f +/- %.2f GByte/s \n", block_rate, data_rate, sd);
 }
 
 // Give the poor user some help on command line options.
 void print_options(char *pname) {
-
     printf("usage: %s [-vc] [-t target] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate]\n", pname);
     printf("\t-v: verbose\n");
     printf("\t-c: compress data before send\n");
@@ -183,9 +181,7 @@ typedef struct compression_stream {
 }*/
 
 void *writer_thread(void *arg) {
-
     stream_rb_t *in = (stream_rb_t *) arg;
-
     uint32_t magic = CODA_MAGIC;
     /* The first thing down a newly opened socket is the magic number
      * The second thing down a newly opened socket is the unique ID of the sender.
@@ -200,10 +196,8 @@ void *writer_thread(void *arg) {
         perror("write error or wrote less than 4 bytes: ");
         return NULL;
     }
-
     // If both writes succeed then we assume all is well and start sending data.
     while (keep_going) {
-
         stream_buffer_t *buf = stream_queue_get(in);
         if (buf == (stream_buffer_t *) -1) break;
         // Total record length is always padded to 4 byte boundary
@@ -214,9 +208,7 @@ void *writer_thread(void *arg) {
         }
         int data_sent = 0;
         int try_send = out_length;
-
         while (data_sent < out_length) {
-
             if (do_debug > 1)
                 printf("send remaining %d bytes of %d", try_send, out_length);
             int nSent = write(target_socket, buf + data_sent, try_send);
@@ -228,7 +220,7 @@ void *writer_thread(void *arg) {
             if (nSent != try_send) {
                 printf("Sent %d bytes out of %d\n", nSent, try_send);
             } 
-	    else
+            else
                 break;
             data_sent += nSent;
             try_send -= nSent;
@@ -240,14 +232,12 @@ void *writer_thread(void *arg) {
 }
 
 int main(int argc, char *argv[]) {
-
     // Define local variables
     struct sockaddr_in internet_address;
     struct timespec delay;
     delay.tv_nsec = delay.tv_sec = 0;
     char *data_file = NULL;
     //int do_compress = TRUE;
-
     // Get the command line arguments
     char opt;
     while ((opt = getopt(argc, argv, "svcf:r:i:h:o:p:n:b:l:")) != -1) {
@@ -301,7 +291,7 @@ int main(int argc, char *argv[]) {
             case 'n':
                 // Send more than once and time each packet.
                 loops_per_cycle = atoi(optarg);
-                if (loops_per_cycle == 0) {
+                if (loops_per_cycle <= 0) {
                     printf("invalid loop count = %s\n", optarg);
                     exit(0);
                 }
@@ -310,7 +300,7 @@ int main(int argc, char *argv[]) {
             case 'l':
                 // Send more than once and time each packet.
                 total_cycles = atoi(optarg);
-                if (total_cycles == 0) {
+                if (total_cycles <= 0) {
                     printf("invalid number of cycles = %s\n", optarg);
                     exit(0);
                 }
@@ -342,14 +332,12 @@ int main(int argc, char *argv[]) {
                 return (0);
         }
     }
-
     // Grab a socket and tune it for performance.
     target_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (target_socket < 0) {
         printf("cannot open socket\n");
         exit(2);
     }
-
     // Size of socket's buffers
     int sockbufsize = 100000;
     printf("socket buffer size =%d\n", sockbufsize);
@@ -365,56 +353,45 @@ int main(int argc, char *argv[]) {
      free(buffer);
      exit(1);
      }*/
-
     // hostdb entry for this target if hostname is given
     struct hostent *host_entry; 
     // Call gethostbyname() to convert string into host_entry from hostdb.
     host_entry = gethostbyname(target_host);
-
     // Set up the socket that we will use for sending.
     // This is an important step. We fill in parts of the address
     // parts that we do not touch must be empty.
     bzero((char *) &internet_address, sizeof(internet_address));
-
     // If host_entry is null then target_host was probably an IP address in dot notation.
     if (host_entry == NULL) {
-      internet_address.sin_addr.s_addr = inet_addr(target_host);
-      if (internet_address.sin_addr.s_addr == -1) {
-	fprintf(stderr, "%s: unknown host\n", target_host);
-	exit(2);
-      }
+        internet_address.sin_addr.s_addr = inet_addr(target_host);
+        if (internet_address.sin_addr.s_addr == -1) {
+            fprintf(stderr, "%s: unknown host\n", target_host);
+            exit(2);
+        }
     } 
     else {
-      // Found argv[1] in hostdb!
-      // Print the name from  host_entry
-      printf(">>> hostname >%s<\n", host_entry->h_name);
-      // copy the address
-      bcopy(host_entry->h_addr, &internet_address.sin_addr, host_entry->h_length);
+        // Found argv[1] in hostdb!
+        // Print the name from  host_entry
+        printf(">>> hostname >%s<\n", host_entry->h_name);
+        // copy the address
+        bcopy(host_entry->h_addr, &internet_address.sin_addr, host_entry->h_length);
     }
-
-    // put in the port.
+    // put in the port
     internet_address.sin_port = htons(target_port);
     internet_address.sin_family = AF_INET;
-
     // Finally, attempt to connect our socket to the target host and port.
-    if (connect(target_socket, (const struct sockaddr *) &internet_address,
-                sizeof(internet_address)) < 0) {
-      perror("connect");
-      printf("connect failed: host %s port %d\n",
-	     inet_ntoa(internet_address.sin_addr),
-	     ntohs(internet_address.sin_port));
-      exit(1);
+    if (connect(target_socket, (const struct sockaddr *) &internet_address, sizeof(internet_address)) < 0) {
+        perror("connect");
+        printf("connect failed: host %s port %d\n",
+                inet_ntoa(internet_address.sin_addr), ntohs(internet_address.sin_port));
+        exit(1);
     }
-
     printf("connected and preparing to send...\n");
     // Done setting up socket
-
     // Set up queues.
     printf("Creating buffer pool %d buffers\n", 4);
-
     // We are going to have a pool of four prefilled buffers created by copying one master.
     free_buffer_queue = stream_queue_create(4);
-
     // Allocate a stream_buffer to hold a master copy of the data.
     int request_length = (payload_length * 4) + sizeof(stream_buffer_t);
     request_length = ((request_length + 3) / 4) << 2;
@@ -423,7 +400,6 @@ int main(int argc, char *argv[]) {
         printf("cannot allocate buffer of %d bytes\n", request_length);
         exit(1);
     }
-
     // construct the master buffer protocol
     bzero(master_data, request_length);
     master_data->source_id = source_id;
@@ -431,23 +407,22 @@ int main(int argc, char *argv[]) {
     master_data->payload_length = payload_length * 4; // length of data payload in bytes
     master_data->compressed_length = payload_length * 4; // equals payload_length so uncompressed.
     master_data->magic = CODA_MAGIC;
-
     // We can fill the master copy from a file if one is specified, otherwise random numbers.
     // Was a data file specified on command line?
     int ix, of, cf;
     if (data_file == NULL) {
-      printf("Filling data source buffer with random numbers\n");
-      // No, so fill buffer with random words
-      for (ix = 0; ix < payload_length; ix++)
-	master_data->payload[ix] = rand();
+        printf("Filling data source buffer with random numbers\n");
+        // No, so fill buffer with random words
+        for (ix = 0; ix < payload_length; ix++)
+            master_data->payload[ix] = rand();
     } 
     else {
-      // Yes, so open data file
-      printf("Filling data source buffer with %d bytes from file %s\n", (int) master_data->payload_length, data_file);
-      of = open(data_file, O_RDONLY);
-      if (!of) {printf("Error opening file %s\n", data_file); exit(-1);}
+        // Yes, so open data file
+        printf("Filling data source buffer with %d bytes from file %s\n",
+                (int) master_data->payload_length, data_file);
+        of = open(data_file, O_RDONLY);
+        if (!of) {printf("Error opening file %s\n", data_file); exit(-1);}
     }
-
     // Pop four copies of master_data on "free buffer" queue...
     for (ix = 0; ix < 4; ix++) {
         char *tmp = malloc(master_data->total_length);
@@ -458,20 +433,12 @@ int main(int argc, char *argv[]) {
         bcopy(master_data, tmp, master_data->total_length);
         stream_queue_add(free_buffer_queue, tmp);
     }
-
     // We are going to time things to see how fast they are.
     struct timespec tvBegin, tvStartBlock;
-
-    // We need somewhere to store rates
-    data_rates  = (double *) malloc(total_cycles * sizeof(double));
-    block_rates = (double *) malloc(total_cycles * sizeof(double));
-
     //snappy_init_env(&env);
-
     // Set tvBegin to the current time.
     clock_gettime(CLOCK_REALTIME, &tvBegin);
     clock_gettime(CLOCK_REALTIME, &tvStartBlock);
-
     // Set up the queues etc for the writer and compression threads.
     // We will have four data compression threads, create management structures
     int out_depth = 4;
@@ -479,7 +446,6 @@ int main(int argc, char *argv[]) {
     struct ringBuffer *out_queue = stream_queue_create(out_depth);
     pthread_t writer_pthread_id;
     pthread_create(&writer_pthread_id, NULL, writer_thread, (void *) out_queue);
-
     /*if (do_compress) {
         int i;
         // Need some queues and some threads each with an in and out queue...
@@ -491,7 +457,6 @@ int main(int argc, char *argv[]) {
                     (void *) &compressors[i]);
         }
     }*/
-
     // Loop sending batches of buffers and measure rate between batches
     int buf_count;
     // save start time
@@ -499,88 +464,90 @@ int main(int argc, char *argv[]) {
     bcopy(&tvStartBlock, &time_then, sizeof(struct timespec));
     uint32_t current_length = master_data->total_length / total_cycles;
     current_length = ((current_length + 3) / 4) << 2;
-
-    for (buf_count = 0; buf_count < total_cycles * loops_per_cycle; buf_count++) {
-
-        stream_buffer_t *buf, *fbuf;
-
-        // if no file, pull an "incoming" buffer off the queue
-        buf = stream_queue_get(free_buffer_queue);
-        buf->record_counter = buf_count;
-	
-	// if there is a data file, handle it
-	int nread;
-	if (data_file != NULL) {
-	  // pop free buffer off cue and assign it to file buffer
-	  fbuf = stream_queue_get(free_buffer_queue);
-	  fbuf->record_counter = buf_count;
-	  // read from file and assign payload to file buffer
-	  nread = read(of, fbuf->payload, (int) fbuf->payload_length);
-	  // sanity check that read size is identical to payload size
-	  if (nread != (int) fbuf->payload_length)
-	    printf("\nonly read %d of %d from data file\n", nread, (int) fbuf->payload_length);
-	  // loop over the data file 
-	  while (nread != 0) {
-	    // add file buffer to queue
-	    stream_queue_add(out_queue, fbuf);
-	    // pop new free buffer off cue
-	    fbuf = stream_queue_get(free_buffer_queue);
-	    fbuf->record_counter = buf_count;
-	    // read next chunk of file and assign it to the file buffer
-	    nread = read(of, fbuf->payload, (int) fbuf->payload_length);
-	  }
-	  // close the file when eof is reached
-	  if (nread == 0) {
-	    cf = close(of);
-	    if(cf == -1) {printf("Error while closing file %s\n", data_file); exit(-1);}
-	    break;
-	  }
-	}
-
-	// acquire the clock time
-        clock_gettime(CLOCK_REALTIME, &buf->timestamp);
-
-        //if (do_debug)
-        //	printf("MAIN adds buffer to out queue\n");
-
-        if (do_scan)
-            buf->total_length = current_length;
-
-        // Put it on the outgoing queue.
-	stream_queue_add(out_queue, buf);
-
-        // Timing
-        if ((buf_count != 0) && ((buf_count % loops_per_cycle) == 0)) {
-
-            print_rate(&tvStartBlock, master_data->total_length);
-
+    // if there no data file, handle it
+    if (data_file == NULL) {
+        // store the data rates for total_cycles (-n) buffers
+        data_rates  = (double *) malloc(total_cycles * sizeof(double));
+        block_rates = (double *) malloc(total_cycles * sizeof(double));
+        for (buf_count = 0; buf_count < total_cycles * loops_per_cycle; buf_count++) {
+            // pop new free buffer off the queue
+            stream_buffer_t *buf;
+            // pull an "incoming" buffer off the queue
+            buf = stream_queue_get(free_buffer_queue);
+            buf->record_counter = buf_count;
+            // acquire the clock time
+            clock_gettime(CLOCK_REALTIME, &buf->timestamp);
+            if (do_scan) buf->total_length = current_length;
+            // Put it on the outgoing queue.
+            stream_queue_add(out_queue, buf);
+            // print rate diagnostics and handle the timing
+            if ((buf_count != 0) && ((buf_count % loops_per_cycle) == 0)) {
+                print_rate(&tvStartBlock, master_data->total_length);
+                current_length += master_data->total_length / total_cycles;
+                current_length = ((current_length + 3) / 4) << 2;
+                if (do_scan && (current_length > master_data->total_length)) {
+                    printf("doing silly break\n");
+                    break;
+                }
+                clock_gettime(CLOCK_REALTIME, &tvStartBlock);
+            }
+            if (delay.tv_nsec > 0)
+                nanosleep(&delay, NULL);
+        }
+        // print rate diagnostics
+        if (buf_count > 1) print_rate(&tvStartBlock, master_data->total_length);
+    } // no data file condition
+    // if there is a data file, handle it
+    if (data_file != NULL) {
+        // store the data rates for only 10000 buffers
+        data_rates  = (double *) malloc(10000*sizeof(double));
+        block_rates = (double *) malloc(10000*sizeof(double));
+        // local variables
+        stream_buffer_t *fbuf;
+        int nread, buf_cntr = 0;
+        // pop new free buffer off the queue
+        fbuf = stream_queue_get(free_buffer_queue);
+        // read from file and assign payload to file buffer
+        nread = read(of, fbuf->payload, (int) fbuf->payload_length);
+        // sanity check that read size is identical to payload size
+        if (nread != (int) fbuf->payload_length)
+            printf("\nonly read %d of %d from data file\n", nread, (int) fbuf->payload_length);
+        // loop over the data file
+        while (nread != 0) {
+            // acquire the clock time
+            clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
+            // add file buffer to queue and iterate record counter
+            stream_queue_add(out_queue, fbuf);
+            // increment the buffer counter
+            buf_cntr++;
+            fbuf->record_counter = buf_cntr;
+            // print rate diagnostics
+            if ((buf_cntr < 10) || (buf_cntr % 1000 == 0)) {
+                printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
+                print_rate(&tvStartBlock, master_data->total_length);
+            }
             current_length += master_data->total_length / total_cycles;
             current_length = ((current_length + 3) / 4) << 2;
-
-            if (do_scan && (current_length > master_data->total_length)) {
-                printf("doing silly break\n");
-                break;
-            }
-            //printf("new current length is %d\n", current_length);
             clock_gettime(CLOCK_REALTIME, &tvStartBlock);
+            // pop new free buffer off queue
+            fbuf = stream_queue_get(free_buffer_queue);
+            // read next chunk of file and assign it to the file buffer
+            nread = read(of, fbuf->payload, (int) fbuf->payload_length);
         }
-        if (delay.tv_nsec > 0)
-            nanosleep(&delay, NULL);
-    }
-
-    if (buf_count > 1) print_rate(&tvStartBlock, master_data->total_length);
-
-    stream_queue_add(out_queue, (stream_buffer_t *) -1); // Tell writer thread to quit...
+        // close the file when eof is reached
+        if (nread == 0) {
+            cf = close(of);
+            if(cf == -1) {printf("Error while closing file %s\n", data_file); exit(-1);}
+        }
+    } // data file condition
+    // tell the writer thread to quit
+    stream_queue_add(out_queue, (stream_buffer_t *) -1);
     void *retval;
     pthread_join(writer_pthread_id, &retval);
     close(target_socket);
-    if (total_cycles > 1) {
-        printf("Average rates are \n----------\n");
-        print_final_stats();
-    }
-
-    // Why bother to free because it's the end of the program? I like things to be tidy
-    // free(buffer);
-    printf("Done testing!\n");
+    // print average rates
+    printf("\nAverage rates : ");
+    print_final_stats();
+    printf("\nDone testing!\n");
 }
 
