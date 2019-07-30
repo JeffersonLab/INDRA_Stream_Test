@@ -20,9 +20,7 @@
 #include "stream_tools.h"
 
 int do_debug = 0;
-
 char *data_file;
-
 int of, wf, cf;
 
 char *date(void) {
@@ -119,6 +117,11 @@ int main(int argc, char **argv) {
             wf = write(of, buf->payload, buf->payload_length);
             if (!wf) {printf ("Error while writing file %s\n", data_file); exit(-1);}
         } // data file condition
+        if (data_file != NULL && buf->end_of_file == true) {
+            // release the message and exit the infinite for loop
+            zmq_msg_close(&msg);
+            break;
+        }
         // release the message
         zmq_msg_close(&msg);
     } // infinite for loop
@@ -129,6 +132,7 @@ int main(int argc, char **argv) {
             printf("Error while closing file %s\n", data_file);
             exit(-1);
         }
+        else printf("\nData file %s successfully closed\n", data_file);
     }
 } // main
 
