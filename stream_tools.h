@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <assert.h>
 #include <time.h>
+#include <stdbool.h>
 
 #ifndef STREAM_TOOLS_H_
 #define STREAM_TOOLS_H_
@@ -27,10 +28,10 @@ typedef struct stream_buffer {
     uint32_t compressed_length;
     uint32_t magic;
     uint32_t format_version;
+    bool     end_of_file;
     uint64_t record_counter;
     struct timespec timestamp;
     uint32_t payload[];
-
 } stream_buffer_t;
 
 uint32_t stream_to_int(uint8_t *buf);
