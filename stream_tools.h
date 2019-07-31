@@ -28,7 +28,7 @@ typedef struct stream_buffer {
     uint32_t compressed_length;
     uint32_t magic;
     uint32_t format_version;
-    bool     end_of_file;
+    uint32_t flags;
     uint64_t record_counter;
     struct timespec timestamp;
     uint32_t payload[];

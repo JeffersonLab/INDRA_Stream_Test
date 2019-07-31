@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
             wf = write(of, buf->payload, buf->payload_length);
             if (!wf) {printf ("Error while writing file %s\n", data_file); exit(-1);}
         } // data file condition
-        if (data_file != NULL && buf->end_of_file == true) {
+        if (data_file != NULL && buf->flags == 1) {
             // release the message and exit the infinite for loop
             zmq_msg_close(&msg);
             break;

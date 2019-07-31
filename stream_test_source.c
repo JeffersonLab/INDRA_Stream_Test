@@ -20,9 +20,9 @@
  * Data is sent over the network in records, a header followed by a payload.
  * The header is defined in stream_tools.h :
  *
- * uint 32 - Total length of this recort in units of 4 bytes.
+ * uint 32 - Total length of this record in units of 4 bytes.
  * uint 32 - Uncompressed payload length.
- * uint 32 - Compressed payload length. If this equals the previous word paylod not compressed.
+ * uint 32 - Compressed payload length. If this equals the previous word payload not compressed.
  * uint 32 - record number - wraps at 32 bit.
  * struct timespec - timestamp
  * uint 32 Payload
@@ -199,7 +199,7 @@ void *writer_thread(void *arg) {
     // If both writes succeed then we assume all is well and start sending data.
     while (keep_going) {
         stream_buffer_t *buf = stream_queue_get(in);
-        if (buf == (stream_buffer_t *) -1) break;
+        if (buf == (stream_buffer_t *) - 1) break;
         // Total record length is always padded to 4 byte boundary
         int out_length = buf->total_length; // this is in bytes
         if (do_debug > 0) {
@@ -269,7 +269,7 @@ int main(int argc, char *argv[]) {
                 break;
             case 'f':
                 // Set the host for this source to send to
-                printf("Data Source File=%s\n", optarg);
+                printf("Data source file = %s\n", optarg);
                 data_file = strdup(optarg);
                 break;
             case 'p':
@@ -340,7 +340,7 @@ int main(int argc, char *argv[]) {
     }
     // Size of socket's buffers
     int sockbufsize = 100000;
-    printf("socket buffer size =%d\n", sockbufsize);
+    printf("socket buffer size = %d\n", sockbufsize);
     // Set the socket buffer size
     if (setsockopt(target_socket, SOL_SOCKET, SO_SNDBUF, &sockbufsize, sizeof(sockbufsize)) < 0) {
         printf("setsockopt SO_SNDBUF failed\n");
@@ -389,11 +389,12 @@ int main(int argc, char *argv[]) {
     printf("connected and preparing to send...\n");
     // Done setting up socket
     // Set up queues.
-    printf("Creating buffer pool %d buffers\n", 4);
-    // We are going to have a pool of four prefilled buffers created by copying one master.
+    printf("Creating buffer pool with %d buffers\n", 4);
+    // We are going to have a pool of four pre-filled buffers created by copying one master.
     free_buffer_queue = stream_queue_create(4);
     // Allocate a stream_buffer to hold a master copy of the data.
     int request_length = (payload_length * 4) + sizeof(stream_buffer_t);
+    // ensure that request length is divisible by 4 bytes
     request_length = ((request_length + 3) / 4) << 2;
     printf("Data buffers will be %d bytes long\n", request_length);
     if ((master_data = (stream_buffer_t *) malloc(request_length)) == NULL) {
@@ -507,6 +508,7 @@ int main(int argc, char *argv[]) {
         int nread, buf_cntr = 0;
         // pop new free buffer off the queue
         fbuf = stream_queue_get(free_buffer_queue);
+        // increment buffer counter
         buf_cntr++; fbuf->record_counter = buf_cntr;
         // read from file and assign payload to file buffer
         nread = read(of, fbuf->payload, (int) fbuf->payload_length);
@@ -515,7 +517,7 @@ int main(int argc, char *argv[]) {
             printf("\nonly read %d of %d from data file\n", nread, (int) fbuf->payload_length);
         // first read can never be zero, at least two buffers will always be sent
         if (nread > 0)
-            fbuf->end_of_file = false;
+            fbuf->flags = 0;
         if (nread == -1)
             {printf("\n!!! Error reading file %s !!!\n", data_file); exit(-1);}
         // loop over the data file
@@ -529,25 +531,26 @@ int main(int argc, char *argv[]) {
                 printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
                 print_rate(&tvStartBlock, master_data->total_length);
             }
+            // iterate lengths and append clock time
             current_length += master_data->total_length;
             current_length = ((current_length + 3) / 4) << 2;
             clock_gettime(CLOCK_REALTIME, &tvStartBlock);
             // pop new free buffer off queue
             fbuf = stream_queue_get(free_buffer_queue);
-            // increment the buffer counter
+            // increment buffer counter
             buf_cntr++; fbuf->record_counter = buf_cntr;
             // read next chunk of file and assign it to the file buffer
             nread = read(of, fbuf->payload, (int) fbuf->payload_length);
             // if eof reached send buffer, if not proceed, if read error occurs exit
             if (nread == 0) {
-                fbuf->end_of_file = true;
+                fbuf->flags = 1;
                 stream_queue_add(out_queue, fbuf);
                 printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
                 print_rate(&tvStartBlock, master_data->total_length);
                 printf("\nEnd of file %s reached\n", data_file);
             }
             if (nread > 0)
-                fbuf->end_of_file = false;
+                fbuf->flags = 0;
             if (nread == -1)
                 {printf("\n!!! Error reading file %s!!!\n", data_file); exit(-1);}
         } // file read while loop
