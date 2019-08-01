@@ -103,11 +103,14 @@ int main(int argc, char **argv) {
         // handle the buffer
         stream_buffer_t *buf = (stream_buffer_t *) zmq_msg_data(&msg);
         // print debug output
-        if ((buf->record_counter < 10) || (buf->record_counter % 1000 == 0)) {
+        if ((buf->record_counter <= 10) || (buf->record_counter % 1000 == 0) || buf->flags == 1) {
             // recieve message content size in bytes
             int size = zmq_msg_size(&msg);
             // print debug messages
-            printf("source id = %08X, buffer id = %08X, length = %d bytes, buffer counter = %" PRIu64 "\n", source_id, buf->source_id, size, buf->record_counter);
+            printf("source id = %08X, buffer id = %08X, zmq message size = %d bytes, "
+                   "buffer size = %d bytes, buffer counter = %" PRIu64 "\n",
+                    source_id, buf->source_id, size,
+                    buf->payload_length + (int) sizeof(stream_buffer_t), buf->record_counter);
             if (do_debug > 0)
                 print_data_hex((uint8_t *) buf, buf->total_length);
         } // buffer print condition

@@ -227,7 +227,7 @@ void *writer_thread(void *arg) {
         }
         stream_queue_add(free_buffer_queue, buf);
     }
-    printf("\nSend thread exits\n");
+    printf("Sending thread exits...\n");
     return 0;
 }
 
@@ -313,7 +313,7 @@ int main(int argc, char *argv[]) {
                     printf("invalid payload_length = %s, must be > 0.\n", optarg);
                     exit(0);
                 }
-                printf("send %d bytes per message\n", payload_length * 4);
+                printf("Sending %d bytes per message\n", payload_length * 4);
                 break;
             case 'r': {
                 int rate = atoi(optarg);
@@ -340,7 +340,7 @@ int main(int argc, char *argv[]) {
     }
     // Size of socket's buffers
     int sockbufsize = 100000;
-    printf("socket buffer size = %d\n", sockbufsize);
+    printf("Socket buffer size = %d bytes\n", sockbufsize);
     // Set the socket buffer size
     if (setsockopt(target_socket, SOL_SOCKET, SO_SNDBUF, &sockbufsize, sizeof(sockbufsize)) < 0) {
         printf("setsockopt SO_SNDBUF failed\n");
@@ -419,7 +419,7 @@ int main(int argc, char *argv[]) {
     } 
     else {
         // Yes, so open data file
-        printf("Filling data source buffer with %d bytes from file %s\n",
+        printf("Filling buffer payloads with %d bytes from file %s\n",
                 (int) master_data->payload_length, data_file);
         of = open(data_file, O_RDONLY);
         if (!of) {printf("Error opening file %s\n", data_file); exit(-1);}
@@ -503,33 +503,44 @@ int main(int argc, char *argv[]) {
         // store the data rates for only 10000 buffers
         data_rates  = (double *) malloc(10000*sizeof(double));
         block_rates = (double *) malloc(10000*sizeof(double));
-        // local variables
+        // define and initialize local variables
         stream_buffer_t *fbuf;
         int nread, buf_cntr = 0;
         // pop new free buffer off the queue
         fbuf = stream_queue_get(free_buffer_queue);
-        // increment buffer counter
+        // increment and update buffer counter
         buf_cntr++; fbuf->record_counter = buf_cntr;
         // read from file and assign payload to file buffer
         nread = read(of, fbuf->payload, (int) fbuf->payload_length);
-        // sanity check that read size is identical to payload size
-        if (nread != (int) fbuf->payload_length)
-            printf("\nonly read %d of %d from data file\n", nread, (int) fbuf->payload_length);
-        // first read can never be zero, at least two buffers will always be sent
-        if (nread > 0)
-            fbuf->flags = 0;
-        if (nread == -1)
+        // check for read errors
+        if (nread <= 0)
             {printf("\n!!! Error reading file %s !!!\n", data_file); exit(-1);}
         // loop over the data file
         while (nread > 0) {
             // acquire the clock time
             clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
-            // add file buffer to queue and iterate record counter
-            stream_queue_add(out_queue, fbuf);
-            // print rate diagnostics
-            if ((buf_cntr <= 10) || (buf_cntr % 100 == 0)) {
+            // handle the case where payload length is larger than the read
+            if (nread < (int) fbuf->payload_length) {
+                // adjust the buffer payload to match the length of the read
+                fbuf->payload_length = nread;
+                // set the end of file flag to true and read to zero
+                fbuf->flags = 1; nread = 0;
+                // send the buffer and print rate diagnostics
+                stream_queue_add(out_queue, fbuf);
                 printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
-                print_rate(&tvStartBlock, master_data->total_length);
+                print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
+                printf("\nEnd of file %s reached...\n", data_file);
+                break;
+            }
+            // handle the case where more data is available
+            // set the end of file flag to false
+            if (nread == (int) fbuf->payload_length)
+                fbuf->flags = 0;
+            // send the buffer and print rate diagnostics
+            stream_queue_add(out_queue, fbuf);
+            if ((buf_cntr <= 10) || (buf_cntr % 1000 == 0)) {
+                printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
+                print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
             }
             // iterate lengths and append clock time
             current_length += master_data->total_length;
@@ -537,27 +548,17 @@ int main(int argc, char *argv[]) {
             clock_gettime(CLOCK_REALTIME, &tvStartBlock);
             // pop new free buffer off queue
             fbuf = stream_queue_get(free_buffer_queue);
-            // increment buffer counter
+            // increment and update buffer counter
             buf_cntr++; fbuf->record_counter = buf_cntr;
             // read next chunk of file and assign it to the file buffer
             nread = read(of, fbuf->payload, (int) fbuf->payload_length);
-            // if eof reached send buffer, if not proceed, if read error occurs exit
-            if (nread == 0) {
-                fbuf->flags = 1;
-                stream_queue_add(out_queue, fbuf);
-                printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
-                print_rate(&tvStartBlock, master_data->total_length);
-                printf("\nEnd of file %s reached\n", data_file);
-            }
-            if (nread > 0)
-                fbuf->flags = 0;
             if (nread == -1)
                 {printf("\n!!! Error reading file %s!!!\n", data_file); exit(-1);}
         } // file read while loop
         // close the file when eof is reached
         if (nread == 0) {
             cf = close(of);
-            if (cf == 0) printf("\nSuccessfully closed source file %s\n", data_file);
+            if (cf == 0) printf("Successfully closed source file %s\n", data_file);
             if (cf == -1) {printf("Error while closing file %s\n", data_file); exit(-1);}
         }
     } // data file condition
@@ -567,8 +568,7 @@ int main(int argc, char *argv[]) {
     pthread_join(writer_pthread_id, &retval);
     close(target_socket);
     // print average rates
-    printf("\nAverage rates : ");
+    printf("Average rates : ");
     print_final_stats();
     printf("\nDone testing!\n");
 }
-
