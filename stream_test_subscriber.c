@@ -32,7 +32,7 @@ char *date(void) {
 }
 
 void print_usage(char *pname) {
-    printf("usage: %s [-v] [-u url] <key>\n\n", pname);
+    printf("usage: %s [-v] [-f file] [-u url] <key>\n\n", pname);
     printf("\t<key>: four byte hex source ID to match\n");
     printf("\t-v: increment debug level\n");
     printf("\t-f: name of file to write buffers too\n");
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
     // Handle command line arguments
     char opt;
     char *url = "tcp://127.0.0.1:5556";
-    while ((opt = getopt(argc, argv, "vuf:")) != -1) {
+    while ((opt = getopt(argc, argv, "vu:f:")) != -1) {
         switch (opt) {
             case 'v':
                 do_debug++;

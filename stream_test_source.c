@@ -500,9 +500,9 @@ int main(int argc, char *argv[]) {
     } // no data file condition
     // if there is a data file, handle it
     if (data_file != NULL) {
-        // store the data rates for only 10000 buffers
-        data_rates  = (double *) malloc(10000*sizeof(double));
-        block_rates = (double *) malloc(10000*sizeof(double));
+        // store the data rates for 1M buffers
+        data_rates  = (double *) malloc(1000000*sizeof(double));
+        block_rates = (double *) malloc(1000000*sizeof(double));
         // define and initialize local variables
         stream_buffer_t *fbuf;
         int nread, buf_cntr = 0;
