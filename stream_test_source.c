@@ -249,7 +249,7 @@ int main(int argc, char *argv[]) {
                 do_jana = 1;
                 printf("JANA2 mode turned on\n");
                 // payload_length is in words
-                payload_length = 320 / 4;
+                payload_length = 400 / 4;
                 printf("Sending %d bytes per message\n", payload_length * 4);
                 break;
             case 's':
@@ -525,17 +525,19 @@ int main(int argc, char *argv[]) {
         if (do_jana) {
             FILE *jf;
             jf = fopen(data_file, "r");
-            char str[fbuf->payload_length];
+            // must account for fgets appending terminating null byte
+            char str[fbuf->payload_length+1];
             // read the file assuming 80 ints of length 4 per line
-            while (fgets(str, fbuf->payload_length,  jf) != NULL) {
+            while (fgets(str, sizeof(str), jf) != NULL) {
                 // acquire the clock time
                 clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
-                // bcopy(str, fbuf->payload, fbuf->payload_length);
-                // str[strcspn(str, "\r\n")] = 0;
-                memcpy(fbuf->payload, str, fbuf->payload_length);
                 if (feof(jf)) {
                     // set the end of file flag to true
                     fbuf->flags = 1;
+                    // remove the terminating null byte from the payload
+                    fbuf->payload_length = fbuf->payload_length - 1;
+                    // fill the buffer payload
+                    memcpy(fbuf->payload, str, fbuf->payload_length);
                     // send the buffer and print rate diagnostics
                     stream_queue_add(out_queue, fbuf);
                     printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
@@ -544,9 +546,12 @@ int main(int argc, char *argv[]) {
                     fclose(jf);
                     break;
                 }
-                if (!feof(jf)) {
+                else {
                     // set the end of file flag to false
                     fbuf->flags = 0;
+                    // fill the buffer payload
+                    memcpy(fbuf->payload, str, fbuf->payload_length);
+                    // printf("\nfbuf->payload = %s\n", (char*) (fbuf->payload));
                     // send the buffer and print rate diagnostics
                     stream_queue_add(out_queue, fbuf);
                     if ((buf_cntr <= 10) || (buf_cntr % 1000 == 0)) {
