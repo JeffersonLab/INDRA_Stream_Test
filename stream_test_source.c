@@ -249,7 +249,7 @@ int main(int argc, char *argv[]) {
                 do_jana = 1;
                 printf("JANA2 mode turned on\n");
                 // payload_length is in words
-                payload_length = 400 / 4;
+                payload_length = 400*1024 / 4;
                 printf("Sending %d bytes per message\n", payload_length * 4);
                 break;
             case 's':
