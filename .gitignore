@@ -15,3 +15,7 @@
 stream_router
 stream_test_source
 stream_test_subscriber
+
+cmake-build-debug/*
+build/*
+.idea/*

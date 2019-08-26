@@ -519,58 +519,61 @@ int main(int argc, char *argv[]) {
         // pop new free buffer off the queue
         fbuf = stream_queue_get(free_buffer_queue);
         // increment and update buffer counter
-        buf_cntr++;
-        fbuf->record_counter = buf_cntr;
+
+        size_t event_size_bytes = fbuf->payload_length;
+
         // handle case for jana streaming
         if (do_jana) {
             FILE *jf;
             jf = fopen(data_file, "r");
-            // must account for fgets appending terminating null byte
-            char str[fbuf->payload_length+1];
-            // read the file assuming 80 ints of length 4 per line
-            while (fgets(str, sizeof(str), jf) != NULL) {
-                // acquire the clock time
-                clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
-                if (feof(jf)) {
-                    // set the end of file flag to true
+            if (jf == NULL) {
+                printf("Unable to open file. Exiting.\n");
+                exit(-1);
+            }
+
+            // Assumes file consists of an integral number of blocks, each of size `event_size_bytes`
+
+            bool finished = false;
+            while (!finished) {
+
+                // Attempt to read a complete event from file
+                fbuf->payload_length = fread(fbuf->payload, 1, event_size_bytes, jf);
+                printf("Read %d bytes\n", fbuf->payload_length);
+
+                // Peek ahead to see if EOF reached
+                char next = fgetc(jf);
+                ungetc(next, jf);
+
+                // Set fields, indicating if we've reached EOF or not
+                if (fbuf->payload_length < event_size_bytes || next == EOF) {
+                    finished = true;
                     fbuf->flags = 1;
-                    // remove the terminating null byte from the payload
-                    fbuf->payload_length = fbuf->payload_length - 1;
-                    // fill the buffer payload
-                    memcpy(fbuf->payload, str, fbuf->payload_length);
-                    // send the buffer and print rate diagnostics
-                    stream_queue_add(out_queue, fbuf);
-                    printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
-                    print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
-                    printf("\nEnd of file %s reached...\n", data_file);
-                    fclose(jf);
-                    break;
                 }
                 else {
-                    // set the end of file flag to false
                     fbuf->flags = 0;
-                    // fill the buffer payload
-                    memcpy(fbuf->payload, str, fbuf->payload_length);
-                    // printf("\nfbuf->payload = %s\n", (char*) (fbuf->payload));
-                    // send the buffer and print rate diagnostics
-                    stream_queue_add(out_queue, fbuf);
-                    if ((buf_cntr <= 10) || (buf_cntr % 1000 == 0)) {
-                        printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
-                        print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
-                    }
-                    // iterate lengths and append clock time
-                    current_length += master_data->total_length;
-                    current_length = ((current_length + 3) / 4) << 2;
-                    clock_gettime(CLOCK_REALTIME, &tvStartBlock);
-                    // pop new free buffer off queue
-                    fbuf = stream_queue_get(free_buffer_queue);
-                    // increment and update buffer counter
-                    buf_cntr++;
-                    fbuf->record_counter = buf_cntr;
                 }
+                fbuf->record_counter = ++buf_cntr;
+                clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
+
+                // Print rates
+                printf("Sending event# %llu, ", fbuf->record_counter);
+                print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
+
+                // Push buffer onto 'send' queue
+                stream_queue_add(out_queue, fbuf);
+
+                // Iterate lengths and append clock time
+                current_length += master_data->total_length;
+                current_length = ((current_length + 3) / 4) << 2;
+                clock_gettime(CLOCK_REALTIME, &tvStartBlock);
+
+                // Pop buffer off of 'free' queue
+                fbuf = stream_queue_get(free_buffer_queue);
             }
+            printf("\nEnd of file %s reached...\n", data_file);
+            fclose(jf);
         }
-        if (!do_jana) {
+        else {
             // read from file and assign payload to file buffer
             nread = read(of, fbuf->payload, (int) fbuf->payload_length);
             // check for read errors
