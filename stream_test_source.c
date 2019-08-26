@@ -540,12 +540,8 @@ int main(int argc, char *argv[]) {
                 fbuf->payload_length = fread(fbuf->payload, 1, event_size_bytes, jf);
                 printf("Read %d bytes\n", fbuf->payload_length);
 
-                // Peek ahead to see if EOF reached
-                char next = fgetc(jf);
-                ungetc(next, jf);
-
                 // Set fields, indicating if we've reached EOF or not
-                if (fbuf->payload_length < event_size_bytes || next == EOF) {
+                if (fbuf->payload_length < event_size_bytes || feof(jf)) {
                     finished = true;
                     fbuf->flags = 1;
                 }
