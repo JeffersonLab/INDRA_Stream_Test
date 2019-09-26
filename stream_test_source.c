@@ -86,6 +86,7 @@ int total_cycles = 1;
 // Default to debug off. Each occurrence of -v on the command line increments do_debug.
 int do_debug = 0;
 int do_scan = 0;
+int do_jana = 0;
 
 // Default to only send 40 bytes.
 int payload_length = 10;
@@ -126,7 +127,7 @@ void print_final_stats() {
 
 // Give the poor user some help on command line options.
 void print_options(char *pname) {
-    printf("usage: %s [-vc] [-t target] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate]\n", pname);
+    printf("usage: %s [-vc] [-t target] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate] [-j jana]\n", pname);
     printf("\t-v: verbose\n");
     printf("\t-c: compress data before send\n");
     printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
@@ -137,6 +138,7 @@ void print_options(char *pname) {
     printf("\t-b <bytes>: bytes per data packet\n");
     printf("\t-r <rate>: rate in kbyte/s\n");
     printf("\t-s: scan mode - divide b by \n");
+    printf("\t-j: jana mode \n");
 }
 
 typedef struct compression_stream {
@@ -240,8 +242,16 @@ int main(int argc, char *argv[]) {
     //int do_compress = TRUE;
     // Get the command line arguments
     char opt;
-    while ((opt = getopt(argc, argv, "svcf:r:i:h:o:p:n:b:l:")) != -1) {
+    while ((opt = getopt(argc, argv, "jsvcf:r:i:h:o:p:n:b:l:")) != -1) {
         switch (opt) {
+            case 'j':
+                // Turn on jana mode
+                do_jana = 1;
+                printf("JANA2 mode turned on\n");
+                // payload_length is in words
+                payload_length = 400*1024 / 4;
+                printf("Sending %d bytes per message\n", payload_length * 4);
+                break;
             case 's':
                 // Turn on debugging and log to stdout
                 do_scan = 1;
@@ -501,66 +511,126 @@ int main(int argc, char *argv[]) {
     // if there is a data file, handle it
     if (data_file != NULL) {
         // store the data rates for 1M buffers
-        data_rates  = (double *) malloc(1000000*sizeof(double));
-        block_rates = (double *) malloc(1000000*sizeof(double));
+        data_rates = (double *) malloc(1000000 * sizeof(double));
+        block_rates = (double *) malloc(1000000 * sizeof(double));
         // define and initialize local variables
         stream_buffer_t *fbuf;
         int nread, buf_cntr = 0;
         // pop new free buffer off the queue
         fbuf = stream_queue_get(free_buffer_queue);
         // increment and update buffer counter
-        buf_cntr++; fbuf->record_counter = buf_cntr;
-        // read from file and assign payload to file buffer
-        nread = read(of, fbuf->payload, (int) fbuf->payload_length);
-        // check for read errors
-        if (nread <= 0)
-            {printf("\n!!! Error reading file %s !!!\n", data_file); exit(-1);}
-        // loop over the data file
-        while (nread > 0) {
-            // acquire the clock time
-            clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
-            // handle the case where payload length is larger than the read
-            if (nread < (int) fbuf->payload_length) {
-                // adjust the buffer payload to match the length of the read
-                fbuf->payload_length = nread;
-                // set the end of file flag to true and read to zero
-                fbuf->flags = 1; nread = 0;
+
+        size_t event_size_bytes = fbuf->payload_length;
+
+        // handle case for jana streaming
+        if (do_jana) {
+            FILE *jf;
+            jf = fopen(data_file, "r");
+            if (jf == NULL) {
+                printf("Unable to open file. Exiting.\n");
+                exit(-1);
+            }
+
+            // Assumes file consists of an integral number of blocks, each of size `event_size_bytes`
+
+            bool finished = false;
+            while (!finished) {
+
+                // Attempt to read a complete event from file
+                fbuf->payload_length = fread(fbuf->payload, 1, event_size_bytes, jf);
+                printf("Read %d bytes\n", fbuf->payload_length);
+
+                // Set fields, indicating if we've reached EOF or not
+                if (fbuf->payload_length < event_size_bytes || feof(jf)) {
+                    finished = true;
+                    fbuf->flags = 1;
+                }
+                else {
+                    fbuf->flags = 0;
+                }
+                fbuf->record_counter = ++buf_cntr;
+                clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
+
+                // Print rates
+                printf("Sending event# %llu, ", fbuf->record_counter);
+                print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
+
+                // Push buffer onto 'send' queue
+                stream_queue_add(out_queue, fbuf);
+
+                // Iterate lengths and append clock time
+                current_length += master_data->total_length;
+                current_length = ((current_length + 3) / 4) << 2;
+                clock_gettime(CLOCK_REALTIME, &tvStartBlock);
+
+                // Pop buffer off of 'free' queue
+                fbuf = stream_queue_get(free_buffer_queue);
+            }
+            printf("\nEnd of file %s reached...\n", data_file);
+            fclose(jf);
+        }
+        else {
+            // read from file and assign payload to file buffer
+            nread = read(of, fbuf->payload, (int) fbuf->payload_length);
+            // check for read errors
+            if (nread <= 0) {
+                printf("\n!!! Error reading file %s !!!\n", data_file);
+                exit(-1);
+            }
+            // loop over the data file
+            while (nread > 0) {
+                // acquire the clock time
+                clock_gettime(CLOCK_REALTIME, &fbuf->timestamp);
+                // handle the case where payload length is larger than the read
+                if (nread < (int) fbuf->payload_length) {
+                    // adjust the buffer payload to match the length of the read
+                    fbuf->payload_length = nread;
+                    // set the end of file flag to true and read to zero
+                    fbuf->flags = 1;
+                    nread = 0;
+                    // send the buffer and print rate diagnostics
+                    stream_queue_add(out_queue, fbuf);
+                    printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
+                    print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
+                    printf("\nEnd of file %s reached...\n", data_file);
+                    break;
+                }
+                // handle the case where more data is available
+                // set the end of file flag to false
+                if (nread == (int) fbuf->payload_length)
+                    fbuf->flags = 0;
                 // send the buffer and print rate diagnostics
                 stream_queue_add(out_queue, fbuf);
-                printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
-                print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
-                printf("\nEnd of file %s reached...\n", data_file);
-                break;
+                if ((buf_cntr <= 10) || (buf_cntr % 1000 == 0)) {
+                    printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
+                    print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
+                }
+                // iterate lengths and append clock time
+                current_length += master_data->total_length;
+                current_length = ((current_length + 3) / 4) << 2;
+                clock_gettime(CLOCK_REALTIME, &tvStartBlock);
+                // pop new free buffer off queue
+                fbuf = stream_queue_get(free_buffer_queue);
+                // increment and update buffer counter
+                buf_cntr++;
+                fbuf->record_counter = buf_cntr;
+                // read next chunk of file and assign it to the file buffer
+                nread = read(of, fbuf->payload, (int) fbuf->payload_length);
+                if (nread == -1) {
+                    printf("\n!!! Error reading file %s!!!\n", data_file);
+                    exit(-1);
+                }
+            } // file read while loop
+            // close the file when eof is reached
+            if (nread == 0) {
+                cf = close(of);
+                if (cf == 0) printf("Successfully closed source file %s\n", data_file);
+                if (cf == -1) {
+                    printf("Error while closing file %s\n", data_file);
+                    exit(-1);
+                }
             }
-            // handle the case where more data is available
-            // set the end of file flag to false
-            if (nread == (int) fbuf->payload_length)
-                fbuf->flags = 0;
-            // send the buffer and print rate diagnostics
-            stream_queue_add(out_queue, fbuf);
-            if ((buf_cntr <= 10) || (buf_cntr % 1000 == 0)) {
-                printf("\nbuffer counter = %d, ", (int) fbuf->record_counter);
-                print_rate(&tvStartBlock, fbuf->payload_length + sizeof(stream_buffer_t));
-            }
-            // iterate lengths and append clock time
-            current_length += master_data->total_length;
-            current_length = ((current_length + 3) / 4) << 2;
-            clock_gettime(CLOCK_REALTIME, &tvStartBlock);
-            // pop new free buffer off queue
-            fbuf = stream_queue_get(free_buffer_queue);
-            // increment and update buffer counter
-            buf_cntr++; fbuf->record_counter = buf_cntr;
-            // read next chunk of file and assign it to the file buffer
-            nread = read(of, fbuf->payload, (int) fbuf->payload_length);
-            if (nread == -1)
-                {printf("\n!!! Error reading file %s!!!\n", data_file); exit(-1);}
-        } // file read while loop
-        // close the file when eof is reached
-        if (nread == 0) {
-            cf = close(of);
-            if (cf == 0) printf("Successfully closed source file %s\n", data_file);
-            if (cf == -1) {printf("Error while closing file %s\n", data_file); exit(-1);}
-        }
+        } // jana condition
     } // data file condition
     // tell the writer thread to quit
     stream_queue_add(out_queue, (stream_buffer_t *) - 1);
