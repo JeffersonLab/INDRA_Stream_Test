@@ -50,7 +50,7 @@ The test data source sends fixed length buffers. The length, in bytes, can be se
 ./stream_test_source -b 4000000
 ```
 
-It is possible for data dependent artifacts that would skew test results. Examples are hardware or drivers giving special treatment long sequences of the same valueor suppressing trailing zeros. To mitigate this the test client defaults to sending a buffer filled with random numbers. 
+It is possible for data dependent artifacts that would skew test results. Examples are hardware or drivers giving special treatment long sequences of the same value or suppressing trailing zeros. To mitigate this the test client defaults to sending a buffer filled with random numbers. 
 
 The user can use the -f <name> option to provide the path to a data file from which the buffer will be filled. 
 
@@ -92,7 +92,7 @@ This example will limit to 100 MB/s.
 
 #### Debugging
 
-For low level testing the client has a "verbose" option which turns on debug prints. This is particularly useful when sending a small number of relatively small buffers since the buffer contents are printed in hexadecimal format. With the same option used at the receiving end manual data quality checks can be made.
+For low level testing the client has a "verbose" option which turns on debug prints. This is particularly useful when sending a small number of relatively small buffers since the buffer contents are printed in hexadecimal format. With the same option used at the receiving end manual data quality checks can be made. Each instance of -v on the command line increments the debug level.
 
 The command line options are summarized here:
 
@@ -227,7 +227,7 @@ In this example the router listens on port 5555
 
 #### Debugging
 
-The -v option sets the debug verbosity, each instance of -d increments the level by one.
+The -v option sets the debug verbosity, each instance of -v increments the level by one.
 
 ```
 ./stream_router -v -p 5555
