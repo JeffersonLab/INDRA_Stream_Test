@@ -5,7 +5,6 @@
  *  Created on: Feb 14, 2019
  *      Author: heyes
  *      Based on ye olde blaster.c that has been kicking around for 25 years or more.
-
  * This version sends a compressed or uncompressed data payload using TCP to a target
  * host and port specified on the command line.
  *
@@ -27,7 +26,6 @@
  * struct timespec - timestamp
  * uint 32 Payload
  *
-
  */
 
 // Don't blame me for this list of includes, Eclipse generates it.
@@ -38,6 +36,7 @@
 #include <math.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -73,6 +72,12 @@ int source_id = 0xC0DA0001;
 
 // Default port is 5555
 int target_port = 5555;
+
+// TCP send buffer size in bytes, 0 = default
+int sendBufSize = 0;
+
+// TCP no delay flag
+int noDelay = 0;
 
 // socket to send on
 int target_socket;
@@ -127,7 +132,7 @@ void print_final_stats() {
 
 // Give the poor user some help on command line options.
 void print_options(char *pname) {
-    printf("usage: %s [-vc] [-t target] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate] [-j jana]\n", pname);
+    printf("usage: %s [-vc] [-t target] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate] [-j jana] [-tb bytes] [-nd]\n", pname);
     printf("\t-v: verbose\n");
     printf("\t-c: compress data before send\n");
     printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
@@ -139,6 +144,8 @@ void print_options(char *pname) {
     printf("\t-r <rate>: rate in kbyte/s\n");
     printf("\t-s: scan mode - divide b by \n");
     printf("\t-j: jana mode \n");
+    printf("\t-tb <bytes>: TCP buffer size \n");
+    printf("\t-nd: TCP set noDelay on \n");
 }
 
 typedef struct compression_stream {
@@ -148,12 +155,10 @@ typedef struct compression_stream {
 
 /*void *compression_thread(void *arg) {
 	compression_stream_t *cs = (compression_stream_t *) arg;
-
 	while (keep_going) {
 		uint8_t *in_data = (uint8_t *) stream_queue_get(cs->in_queue);
 		uint8_t *buffer_out;
 		uint32_t payload_length = stream_to_int(in_data);
-
 		// We reserve 3 x 32-bit words to hold lengths - see later...
 		if ((buffer_out = (uint8_t *) malloc(
 				snappy_max_compressed_length(payload_length + 12) + 12)) == NULL) {
@@ -162,16 +167,13 @@ typedef struct compression_stream {
 							+ 12);
 			exit(1);
 		}
-
 		size_t out_length = snappy_max_compressed_length(payload_length);
 		int res = snappy_compress(&env, (char *) &in_data[8],
 				payload_length - 8, (char *) &buffer_out[8], &out_length);
-
 		// Fill in the two length words..
 		// 1) Current total length of the buffer
 		// 2) Payload uncompressed length
 		// 3) Payload compressed length.
-
 		//printf("Snappy, before %p %d after %p %d\n", buffer, payload_length, buffer_out, out_length);
 		if (res != 0) {
 			printf("Snappy not Happy %d, to before %d after %d\n", res,
@@ -241,8 +243,17 @@ int main(int argc, char *argv[]) {
     char *data_file = NULL;
     //int do_compress = TRUE;
     // Get the command line arguments
+    
+    /* 4 multiple character command-line options */
+    static struct option long_options[] = {
+        {"tb", 1, NULL, 0},
+        {"nd", 0, NULL, 1},
+        {0, 0, 0, 0}
+    };
+
     char opt;
-    while ((opt = getopt(argc, argv, "jsvcf:r:i:h:o:p:n:b:l:")) != -1) {
+//    while ((opt = getopt(argc, argv, "jsvcf:r:i:h:o:p:n:b:l:")) != -1) {
+    while ((opt = getopt_long_only(argc, argv, "jsvcf:r:i:h:o:p:n:b:l:", long_options, 0)) != -1) {
         switch (opt) {
             case 'j':
                 // Turn on jana mode
@@ -337,6 +348,16 @@ int main(int argc, char *argv[]) {
                 printf("send at %d kbytes per second, %d Hz\n", rate, brate);
                 break;
             }
+            case 0:
+                sendBufSize = atoi(optarg);
+                if (sendBufSize < 1) {
+                    printf("invalid TCP send buffer size, must be > 0.\n");
+                    exit(0);
+                }
+                break;
+            case 1:
+                noDelay = 1;
+                break;
             default:
                 print_options(argv[0]);
                 return (0);
@@ -348,14 +369,35 @@ int main(int argc, char *argv[]) {
         printf("cannot open socket\n");
         exit(2);
     }
+    
     // Size of socket's buffers
-    int sockbufsize = 100000;
-    printf("Socket buffer size = %d bytes\n", sockbufsize);
-    // Set the socket buffer size
-    if (setsockopt(target_socket, SOL_SOCKET, SO_SNDBUF, &sockbufsize, sizeof(sockbufsize)) < 0) {
-        printf("setsockopt SO_SNDBUF failed\n");
-        exit(1);
+    if (sendBufSize != 0) {
+        printf("Set TCP send buf size to %d bytes\n", sendBufSize);
+        // Set the socket buffer size
+        if (setsockopt(target_socket, SOL_SOCKET, SO_SNDBUF, &sendBufSize, sizeof(sendBufSize)) < 0) {
+            printf("setsockopt SO_SNDBUF failed\n");
+            exit(1);
+        }
     }
+    
+    int sBufSize;
+    socklen_t len = sizeof(sBufSize);
+    if (getsockopt(target_socket, SOL_SOCKET, SO_SNDBUF, &sBufSize, &len) < 0) {
+        printf("ERROR retrieving actual TCP send buf size\n");
+    }
+    else {
+        printf("Actual TCP send buf size = %d bytes\n", sBufSize);
+    }
+
+    // Set TCP nodelay
+    if (noDelay) {
+        if (setsockopt(target_socket, IPPROTO_TCP, TCP_NODELAY, (char*) &noDelay, sizeof(noDelay)) < 0) {
+            printf("setsockopt TCP_NODELAY failed\n");
+            exit(1);
+        }
+        printf("Set TCP send socket to no delay\n");
+    }
+       
     /*optval = 1;
      if (setsockopt(target_socket, IPPROTO_TCP, TCP_NODELAY, &optval,
      sizeof(optval)) < 0) {

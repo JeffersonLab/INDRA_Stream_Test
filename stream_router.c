@@ -1,9 +1,9 @@
-//  Multithreaded Stream Router
 
 #include <arpa/inet.h>
 #include <assert.h>
 #include <getopt.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -30,6 +30,8 @@ int server_socket;
 char *publisher = "tcp://*:5556";
 void *out_queue;
 void *publish_socket;
+// TCP receive buffer size in bytes, 0 = default
+int rcvBufSize = 0;
 
 typedef struct worker_thread_context {
     char name[64];
@@ -202,13 +204,14 @@ void cc_handler(int signum) {
 
 // Give the poor user some help on command line options.
 void print_options(char *pname) {
-    printf("usage:\t%s [-v] [-t target] [-p port] [-u url]\n", pname);
+    printf("usage:\t%s [-v] [-t target] [-p port] [-u url] -b [bytes]\n", pname);
     printf("\t-v: verbose\n");
     printf("\t-z: use zmq for output\n");
     //printf("\t-m: use mpi for output\n");
     printf("\t-s: print statistics every 10s\n");
     printf("\t-p <port>: specify a port [default: 5555]\n");
     printf("\t-u <url>: specify url to publish on [default: tcp://*:5556]\n");
+    printf("\t-b <bytes>: specify TCP receive buffer size\n");
 }
 
 int main(int argc, char **argv) {
@@ -218,8 +221,9 @@ int main(int argc, char **argv) {
     printf("Initializing -------\n");
     if (argc >1) {
         printf("\tExecuting with command line options\n\t");
+        
         char opt;
-        while ((opt = getopt(argc, argv, "mzvp:su:")) != -1) {
+        while ((opt = getopt(argc, argv, "mzvp:su:b:")) != -1) {
             switch (opt) {
                 case 'v':
                     // Log to stdout
@@ -252,7 +256,15 @@ int main(int argc, char **argv) {
                 case 'u':
                     publisher = strdup(optarg);
                     break;
-                default:
+                case 'b':
+                    rcvBufSize = atoi(optarg);
+                    if (rcvBufSize < 1) {
+                        printf("invalid TCP receive buffer size, must be > 0.\n");
+                        exit(0);
+                    }
+                    printf("Set TCP receive buf size to %d bytes\n\t", rcvBufSize);
+                    break;
+               default:
                     print_options(argv[0]);
                     printf("%s exits\n", argv[0]);
                     return (0);
@@ -318,6 +330,23 @@ int main(int argc, char **argv) {
         if (connection > 0) {
             printf("We got a connection from %s\n", inet_ntoa((struct in_addr) from.sin_addr));
             printf("fire up a thread to handle it,\n");
+            
+            /* set receive buffer size unless default specified by a value <= 0  */
+            if (rcvBufSize > 0) {
+                if (setsockopt(connection, SOL_SOCKET, SO_RCVBUF, (char*) &rcvBufSize, sizeof(rcvBufSize)) < 0) {
+                    printf("setsockopt error setting TCP receive buffer size\n");
+                }
+            }         
+            
+            int rBufSize;
+            socklen_t len = sizeof(rBufSize);
+            if (getsockopt(connection, SOL_SOCKET, SO_RCVBUF, &rBufSize, &len) < 0) {
+                printf("ERROR retrieving actual TCP receive buf size\n");
+            }
+            else {
+                 printf("Actual TCP receive buf size = %d bytes\n", rBufSize);
+            }
+            
             worker_thread_context_t *thread_context;
             // Create a worker thread structure
             thread_context = (worker_thread_context_t *) malloc(sizeof(worker_thread_context_t));
