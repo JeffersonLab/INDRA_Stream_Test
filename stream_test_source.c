@@ -132,10 +132,10 @@ void print_final_stats() {
 
 // Give the poor user some help on command line options.
 void print_options(char *pname) {
-    printf("usage: %s [-vc] [-t target] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate] [-j jana] [-tb bytes] [-nd]\n", pname);
+    printf("usage: %s [-vc] [-h host] [-f file] [-p port] [-n buffers] [-l loops] [-b bytes] [-r rate] [-j jana] [-tb bytes] [-nd]\n", pname);
     printf("\t-v: verbose\n");
     printf("\t-c: compress data before send\n");
-    printf("\t-t <target>: specify a host [default: \"localhost\"]\n");
+    printf("\t-h <host>: specify a host [default: \"localhost\"]\n");
     printf("\t-f <file>: read source data from a file [default: random data]\n");
     printf("\t-p <port>: specify a port [default: 5555]\n");
     printf("\t-n <buffers>: number of buffers per loop\n");
