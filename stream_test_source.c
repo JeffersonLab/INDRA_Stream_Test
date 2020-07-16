@@ -47,6 +47,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <zmq.h>
 
 #include "stream_tools.h"
 
@@ -95,6 +96,19 @@ int do_jana = 0;
 
 // Default to only send 40 bytes.
 int payload_length = 10;
+
+// stuff to support timestamp syncronization: leader or fellow
+int tsync_n_fellows = 0;
+void * zmq_ctx = NULL;
+void * zmq_sync_sock = NULL;
+void * zmq_ts_sock = NULL;
+char * tsync_leader_host = NULL;
+int tsync_leader_port = 24680;
+
+typedef struct tsync {
+    uint64_t record_counter;
+    struct timespec timestamp;
+} tsync_t;
 
 void print_rate(struct timespec *tv, uint32_t length) {
     // local variables
@@ -146,6 +160,9 @@ void print_options(char *pname) {
     printf("\t-j: jana mode \n");
     printf("\t-tb <bytes>: TCP buffer size \n");
     printf("\t-nd: TCP set noDelay on \n");
+    printf("\t-tsl <num fellows>: specify number of fellows in time sync group\n");
+    printf("\t-tsf <host>: specify network address or name of time sync leader\n");
+    printf("\t-tslp <port>: specify port for time sync leader [default: %d]\n",tsync_leader_port);
 }
 
 typedef struct compression_stream {
@@ -187,6 +204,9 @@ typedef struct compression_stream {
 void *writer_thread(void *arg) {
     stream_rb_t *in = (stream_rb_t *) arg;
     uint32_t magic = CODA_MAGIC;
+    int tsync_done = 0;
+    struct timespec recent_ts = {0, 0};
+
     /* The first thing down a newly opened socket is the magic number
      * The second thing down a newly opened socket is the unique ID of the sender.
      */
@@ -204,6 +224,56 @@ void *writer_thread(void *arg) {
     while (keep_going) {
         stream_buffer_t *buf = stream_queue_get(in);
         if (buf == (stream_buffer_t *) - 1) break;
+
+        // if we are a tsync leader, then we need to publish current event timestamp
+        if (tsync_n_fellows) {
+            tsync_t tsync = { buf->record_counter, buf->timestamp };
+            int r = zmq_send(zmq_ts_sock,&tsync,sizeof(tsync),0);
+            if (r < 0) {
+                perror("zmq_send() failed on ts socket: ");
+                break;
+            }
+        }
+        // if we are a tsync fellow, we need to receive next timestamp
+        else if (tsync_leader_host && !tsync_done) {
+            tsync_t tsync;
+            int r = zmq_recv(zmq_ts_sock,&tsync,sizeof(tsync),0);
+            if (r < 0) {
+                perror("zmq_recv() failed on ts socket: ");
+                tsync_done = 1;
+            }
+            else if (tsync.timestamp.tv_sec == 0) {
+                tsync_done = 1;
+            }
+            else {
+                // maybe drop buffers to catch up
+                int n = 0;
+                while (buf != (stream_buffer_t *) - 1 && buf->record_counter < tsync.record_counter) {
+                    stream_queue_add(free_buffer_queue, buf);
+                    buf = stream_queue_get(in);
+                    ++n;
+                }
+                if (n > 0 && do_debug) {
+                    printf("Drop %d messages (record number gap).\n",n);
+                }
+            }
+            if (buf == (stream_buffer_t *) - 1) break;
+            buf->timestamp = tsync.timestamp;
+        }
+        // drop backwards timestamps (possible when time sync leader is done, but fellows have more to do)
+        if (tsync_done) {
+            int n = 0;
+            while (buf != (stream_buffer_t *) - 1 && (buf->timestamp.tv_sec < recent_ts.tv_sec || (buf->timestamp.tv_sec == recent_ts.tv_sec && buf->timestamp.tv_nsec < recent_ts.tv_nsec))) {
+                stream_queue_add(free_buffer_queue, buf);
+                buf = stream_queue_get(in);
+                ++n;
+            }
+            if (n > 0 && do_debug) {
+                printf("Drop %d messages (old timestamps).\n",n);
+            }
+        }
+        recent_ts = buf->timestamp;
+
         // Total record length is always padded to 4 byte boundary
         int out_length = buf->total_length; // this is in bytes
         if (do_debug > 0) {
@@ -248,6 +318,9 @@ int main(int argc, char *argv[]) {
     static struct option long_options[] = {
         {"tb", 1, NULL, 0},
         {"nd", 0, NULL, 1},
+        {"tsl", 1, NULL, 2},
+        {"tsf", 1, NULL, 3},
+        {"tslp", 1, NULL, 4},
         {0, 0, 0, 0}
     };
 
@@ -358,11 +431,112 @@ int main(int argc, char *argv[]) {
             case 1:
                 noDelay = 1;
                 break;
+            case 2: { // time sync leader -- arg is num fellows
+                tsync_n_fellows = atoi(optarg);
+                if (tsync_n_fellows < 1 || tsync_n_fellows > 32) {
+                    fprintf(stderr, "-tsl requires an integer argument n: 0 < n <= 32");
+                    exit(1);
+                }
+                break;
+            }
+            case 3: { // time sync fellow -- arg is host name or IP address of leader
+                tsync_leader_host = optarg;
+                break;
+            }
+            case 4: { // time sync leader port
+                tsync_leader_port = atoi(optarg);
+                break;
+            }
             default:
                 print_options(argv[0]);
                 return (0);
         }
     }
+
+    // handle time sync if specified
+    if (tsync_n_fellows > 0) { // leader
+        zmq_ctx = zmq_ctx_new();
+        zmq_sync_sock = zmq_socket(zmq_ctx,ZMQ_REP);
+        if (!zmq_sync_sock) {
+            perror("zmq_socket(ZMQ_REP) failed: ");
+            exit(1);
+        }
+        zmq_ts_sock = zmq_socket(zmq_ctx,ZMQ_PUB);
+        if (!zmq_ts_sock) {
+            perror("zmq_socket(ZMQ_PUB) failed: ");
+            exit(1);
+        }
+        char str[16];
+        snprintf(str,sizeof(str),"tcp://*:%d",tsync_leader_port);
+        int r = zmq_bind(zmq_sync_sock, str);
+        if (r != 0) {
+            perror("zmq_bind() failed for sync socket: ");
+            exit(1);
+        }
+        snprintf(str,sizeof(str),"tcp://*:%d",tsync_leader_port+1);
+        r = zmq_bind(zmq_ts_sock, str);
+        if (r != 0) {
+            perror("zmq_bind() failed for ts socket: ");
+            exit(1);
+        }
+        // wait for all fellows to join in
+        for (int i = 0; i < tsync_n_fellows; ++i) {
+            r = zmq_recv(zmq_sync_sock,NULL,0,0);
+            if (r < 0) {
+                perror("zmq_recv() failed on sync socket: ");
+                exit(1);
+            }
+            r = zmq_send(zmq_sync_sock,NULL,0,0);
+            if (r < 0) {
+                perror("zmq_send() failed on sync socket: ");
+                exit(1);
+            }
+        }
+        printf("All tsync fellows have joined.\n");
+    }
+    else if (tsync_leader_host) { // fellow
+        zmq_ctx = zmq_ctx_new();
+        zmq_sync_sock = zmq_socket(zmq_ctx,ZMQ_REQ);
+        if (!zmq_sync_sock) {
+            perror("zmq_socket(ZMQ_REQ) failed: ");
+            exit(1);
+        }
+        zmq_ts_sock = zmq_socket(zmq_ctx,ZMQ_SUB);
+        if (!zmq_ts_sock) {
+            perror("zmq_socket(ZMQ_SUB) failed: ");
+            exit(1);
+        }
+        char str[128];
+        snprintf(str,sizeof(str),"tcp://%s:%d",tsync_leader_host,tsync_leader_port);
+        int r = zmq_connect(zmq_sync_sock, str);
+        if (r != 0) {
+            perror("zmq_connect() failed for sync socket: ");
+            exit(1);
+        }
+        snprintf(str,sizeof(str),"tcp://%s:%d",tsync_leader_host,tsync_leader_port+1);
+        r = zmq_connect(zmq_ts_sock, str);
+        if (r != 0) {
+            perror("zmq_connect() failed for ts socket: ");
+            exit(1);
+        }
+        r = zmq_setsockopt(zmq_ts_sock,ZMQ_SUBSCRIBE,NULL,0);
+        if (r != 0) {
+            perror("zmq_setsockopt(ZMQ_SUBSCRIBE) failed for ts socket: ");
+        }
+        // join the leader
+        r = zmq_send(zmq_sync_sock,NULL,0,0);
+        if (r < 0) {
+            perror("zmq_send() failed on sync socket: ");
+            exit(1);
+        }
+        r = zmq_recv(zmq_sync_sock,NULL,0,0);
+        if (r < 0) {
+            perror("zmq_recv() failed on sync socket: ");
+            exit(1);
+        }
+        printf("Joined tsync leader.\n");
+    }
+
     // Grab a socket and tune it for performance.
     target_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (target_socket < 0) {
@@ -683,4 +857,46 @@ int main(int argc, char *argv[]) {
     printf("Average rates : ");
     print_final_stats();
     printf("\nDone testing!\n");
+
+
+    // broadcast stop message, wait for fellows to check in
+    while (tsync_n_fellows > 0) {
+        tsync_t tsync = { 0, { 0, 0} };
+        int r = zmq_send(zmq_ts_sock,&tsync,sizeof(tsync),0);
+        if (r < 0) {
+            perror("zmq_send() failed on ts socket: ");
+        }
+        r = zmq_recv(zmq_sync_sock,NULL,0,0);
+        if (r < 0) {
+            perror("zmq_recv() failed on sync socket: ");
+            break;
+        }
+        r = zmq_send(zmq_sync_sock,NULL,0,0);
+        if (r < 0) {
+            perror("zmq_send() failed on sync socket: ");
+        }
+        --tsync_n_fellows;
+    }
+    // check in with leader
+    if (tsync_leader_host) {
+        int r = zmq_send(zmq_sync_sock,NULL,0,0);
+        if (r < 0) {
+            perror("zmq_send() failed on sync socket: ");
+        }
+        else {
+            r = zmq_recv(zmq_sync_sock,NULL,0,0);
+            if (r < 0) {
+                perror("zmq_recv() failed on sync socket: ");
+            }
+        }
+    }
+    // shut down zmq
+    if (zmq_ctx) {
+        int zero = 0;
+        zmq_setsockopt(zmq_ts_sock,ZMQ_LINGER,&zero,sizeof(zero));
+        zmq_setsockopt(zmq_sync_sock,ZMQ_LINGER,&zero,sizeof(zero));
+        zmq_close(zmq_ts_sock);
+        zmq_close(zmq_sync_sock);
+        zmq_ctx_destroy(zmq_ctx);
+    }
 }
